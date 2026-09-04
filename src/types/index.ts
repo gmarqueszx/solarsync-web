@@ -187,6 +187,13 @@ export interface Vistoria {
 
 // ---------- Unificação ----------
 
+/**
+ * O desligamento do medidor unificado é um ciclo de solicitar e aguardar retorno, não um
+ * liga-desliga: terminada a instalação, confere-se a unificação e, se houve, pede-se o
+ * desligamento. `OS_ABERTA` é o desvio para quando a equipe de campo não realiza.
+ */
+export type StatusDesligamento = 'NAO_SOLICITADO' | 'SOLICITADO' | 'OS_ABERTA' | 'CONCLUIDO';
+
 export interface Unificacao {
   id: number;
   cliente: ClienteResumo;
@@ -194,7 +201,9 @@ export interface Unificacao {
   projetista: UsuarioResumo | null;
   informacoes: string | null;
   feita: boolean;
-  desligamento: boolean;
+  desligamentoStatus: StatusDesligamento;
+  desligamentoSolicitadoEm: string | null;
+  desligamentoConcluidoEm: string | null;
   criadoEm: string;
   atualizadoEm: string;
 }
@@ -244,6 +253,7 @@ export interface KPIStats {
   tempoMedioParaAprovacaoDias: number | null;
   tempoMedioParadoDebitoDias: number | null;
   tempoMedioInstalacaoVistoriaDias: number | null;
+  tempoMedioEsperaDesligamentoDias: number | null;
   tempoMedioCicloCompletoDias: number | null;
 
   pendenciasAbertasNoPeriodo: number;
@@ -258,6 +268,9 @@ export interface KPIStats {
   vistoriasAprovadas: number;
   vistoriasReprovadas: number;
   unificacoesPendentes: number;
+  desligamentosAguardando: number;
+  desligamentosComOsAberta: number;
+  desligamentosConcluidos: number;
 }
 
 export interface PeriodoDashboard {
@@ -319,4 +332,11 @@ export const ROTULO_STATUS_VISTORIA: Record<StatusVistoria, string> = {
 export const ROTULO_STATUS_DEBITO: Record<StatusDebito, string> = {
   ATIVO: 'Ativo',
   QUITADO: 'Quitado',
+};
+
+export const ROTULO_STATUS_DESLIGAMENTO: Record<StatusDesligamento, string> = {
+  NAO_SOLICITADO: 'A solicitar',
+  SOLICITADO: 'Aguardando equipe',
+  OS_ABERTA: 'O.S. aberta',
+  CONCLUIDO: 'Desligado',
 };

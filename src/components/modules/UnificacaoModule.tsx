@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Unificacao } from '../../types';
+import { ROTULO_STATUS_DESLIGAMENTO, Unificacao } from '../../types';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -23,7 +23,9 @@ export const UnificacaoModule: React.FC = () => {
     criarUnificacao,
     concluirUnificacao,
     reabrirUnificacao,
-    registrarDesligamento,
+    solicitarDesligamento,
+    abrirOrdemDeServico,
+    concluirDesligamento,
   } = useApp();
 
   /** A linha traz só o resumo do cliente; vendedor vem do cadastro completo. */
@@ -72,8 +74,7 @@ export const UnificacaoModule: React.FC = () => {
         (filtroFeita === 'FEITA' ? u.feita : !u.feita);
 
       const matchDesligamento =
-        filtroDesligamento === 'TODOS' ||
-        (filtroDesligamento === 'SIM' ? u.desligamento : !u.desligamento);
+        filtroDesligamento === 'TODOS' || u.desligamentoStatus === filtroDesligamento;
 
       return matchTexto && matchFeita && matchDesligamento;
     });
@@ -121,9 +122,19 @@ export const UnificacaoModule: React.FC = () => {
 
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
           <div>
-            <span className="text-xs text-[#424342]">Desligamentos Registrados</span>
+            {/*
+              Mostra quem está ESPERANDO, não quem já concluiu: a fila de espera é a que se
+              perde de vista, e é nela que o gestor precisa agir.
+            */}
+            <span className="text-xs text-[#424342]">Aguardando Desligamento</span>
             <div className="text-xl font-semibold text-amber-700 mt-1">
-              {unificacoes.filter(u => u.desligamento).length} medidores
+              {
+                unificacoes.filter(
+                  u => u.desligamentoStatus === 'SOLICITADO'
+                    || u.desligamentoStatus === 'OS_ABERTA',
+                ).length
+              }{' '}
+              medidores
             </div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
@@ -185,8 +196,10 @@ export const UnificacaoModule: React.FC = () => {
             className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-xs"
           >
             <option value="TODOS">Todos Desligamentos</option>
-            <option value="SIM">Desligamento Registrado</option>
-            <option value="NAO">Sem Desligamento</option>
+            <option value="NAO_SOLICITADO">A solicitar</option>
+            <option value="SOLICITADO">Aguardando equipe</option>
+            <option value="OS_ABERTA">O.S. aberta</option>
+            <option value="CONCLUIDO">Desligado</option>
           </select>
 
           <button
@@ -258,16 +271,49 @@ export const UnificacaoModule: React.FC = () => {
                       </button>
                     </td>
                     <td className="py-3.5 px-4 text-center">
-                      {/* O desligamento é um registro, não um interruptor: só se marca uma vez. */}
-                      {u.desligamento ? (
-                        <Badge variant="success">Desligamento Feito</Badge>
+                      {/*
+                        Ciclo de solicitar e aguardar retorno: cada estado oferece só a ação
+                        que faz sentido a seguir. Solicitar exige a unificação feita — a API
+                        recusa com 409 e o toast explica.
+                      */}
+                      {u.desligamentoStatus === 'CONCLUIDO' ? (
+                        <Badge variant="success">Desligado</Badge>
+                      ) : u.desligamentoStatus === 'SOLICITADO' ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <Badge variant="warning">Aguardando equipe</Badge>
+                          <button
+                            onClick={() => concluirDesligamento(u.id).catch(() => {})}
+                            className="text-[11px] font-medium text-[#149911] hover:underline"
+                            title="Registrar que o medidor foi desligado"
+                          >
+                            concluir
+                          </button>
+                          <button
+                            onClick={() => abrirOrdemDeServico(u.id).catch(() => {})}
+                            className="text-[11px] font-medium text-amber-700 hover:underline"
+                            title="A equipe de campo não realizou o desligamento"
+                          >
+                            abrir O.S.
+                          </button>
+                        </div>
+                      ) : u.desligamentoStatus === 'OS_ABERTA' ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <Badge variant="danger">O.S. aberta</Badge>
+                          <button
+                            onClick={() => concluirDesligamento(u.id).catch(() => {})}
+                            className="text-[11px] font-medium text-[#149911] hover:underline"
+                            title="Registrar que o medidor foi desligado"
+                          >
+                            concluir
+                          </button>
+                        </div>
                       ) : (
                         <button
-                          onClick={() => registrarDesligamento(u.id).catch(() => {})}
+                          onClick={() => solicitarDesligamento(u.id).catch(() => {})}
                           className="inline-flex items-center gap-1.5 focus:outline-none"
-                          title="Registrar desligamento físico do medidor"
+                          title="Solicitar o desligamento do medidor unificado"
                         >
-                          <Badge variant="neutral">Registrar Desligamento</Badge>
+                          <Badge variant="neutral">Solicitar Desligamento</Badge>
                         </button>
                       )}
                     </td>
@@ -336,12 +382,12 @@ export const UnificacaoModule: React.FC = () => {
               >
                 Fechar
               </button>
-              {!unificacaoSelecionada.desligamento && (
+              {unificacaoSelecionada.desligamentoStatus === 'NAO_SOLICITADO' && (
                 <button
                   type="button"
                   onClick={async () => {
                     try {
-                      await registrarDesligamento(unificacaoSelecionada.id);
+                      await solicitarDesligamento(unificacaoSelecionada.id);
                       setIsModalDetalheAberto(false);
                     } catch {
                       /* toast de erro já exibido pelo contexto */
@@ -350,7 +396,25 @@ export const UnificacaoModule: React.FC = () => {
                   className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors flex items-center gap-1.5"
                 >
                   <PowerOff className="w-4 h-4" />
-                  Registrar Desligamento
+                  Solicitar Desligamento
+                </button>
+              )}
+              {(unificacaoSelecionada.desligamentoStatus === 'SOLICITADO'
+                || unificacaoSelecionada.desligamentoStatus === 'OS_ABERTA') && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await concluirDesligamento(unificacaoSelecionada.id);
+                      setIsModalDetalheAberto(false);
+                    } catch {
+                      /* toast de erro já exibido pelo contexto */
+                    }
+                  }}
+                  className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors flex items-center gap-1.5"
+                >
+                  <PowerOff className="w-4 h-4" />
+                  Registrar Medidor Desligado
                 </button>
               )}
               <button
@@ -392,11 +456,27 @@ export const UnificacaoModule: React.FC = () => {
               </div>
 
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
-                <span className="text-xs text-slate-500 block mb-1">Desligamento Físico de Medidor</span>
-                {unificacaoSelecionada.desligamento ? (
-                  <Badge variant="success">Desligamento Feito</Badge>
-                ) : (
-                  <Badge variant="neutral">Aguardando Desligamento / O.S.</Badge>
+                <span className="text-xs text-slate-500 block mb-1">Desligamento do Medidor</span>
+                <Badge
+                  variant={
+                    unificacaoSelecionada.desligamentoStatus === 'CONCLUIDO'
+                      ? 'success'
+                      : unificacaoSelecionada.desligamentoStatus === 'OS_ABERTA'
+                        ? 'danger'
+                        : unificacaoSelecionada.desligamentoStatus === 'SOLICITADO'
+                          ? 'warning'
+                          : 'neutral'
+                  }
+                >
+                  {ROTULO_STATUS_DESLIGAMENTO[unificacaoSelecionada.desligamentoStatus]}
+                </Badge>
+                {unificacaoSelecionada.desligamentoSolicitadoEm && (
+                  <p className="text-[11px] text-slate-500 mt-1.5">
+                    {/* Data crua, como no resto das telas — ver nota de formatação no CLAUDE.md */}
+                    Solicitado em {unificacaoSelecionada.desligamentoSolicitadoEm}
+                    {unificacaoSelecionada.desligamentoConcluidoEm
+                      && ` · desligado em ${unificacaoSelecionada.desligamentoConcluidoEm}`}
+                  </p>
                 )}
               </div>
             </div>

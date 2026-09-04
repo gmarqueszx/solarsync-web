@@ -15,6 +15,7 @@ import {
   Projeto,
   ProjetoResumo,
   StatusDebito,
+  StatusDesligamento,
   StatusPendencia,
   StatusProjeto,
   StatusVistoria,
@@ -210,8 +211,14 @@ export const vistoriasApi = {
 // ---------- Unificações ----------
 
 export const unificacoesApi = {
-  listar: (filtro: { feita?: boolean; desligamento?: boolean; q?: string } = {}) =>
-    api.get<Pagina<Unificacao>>('/api/unificacoes', { ...filtro, size: TAMANHO_PADRAO }),
+  listar: (
+    filtro: { feita?: boolean; desligamentoStatus?: StatusDesligamento[]; q?: string } = {},
+  ) =>
+    api.get<Pagina<Unificacao>>('/api/unificacoes', {
+      ...filtro,
+      desligamentoStatus: filtro.desligamentoStatus?.join(','),
+      size: TAMANHO_PADRAO,
+    }),
   criar: (dados: {
     clienteId: number;
     cidade?: string | null;
@@ -229,8 +236,14 @@ export const unificacoesApi = {
   ) => api.put<Unificacao>(`/api/unificacoes/${id}`, dados),
   concluir: (id: number) => api.post<Unificacao>(`/api/unificacoes/${id}/concluir`),
   reabrir: (id: number) => api.post<Unificacao>(`/api/unificacoes/${id}/reabrir`),
-  registrarDesligamento: (id: number) =>
-    api.post<Unificacao>(`/api/unificacoes/${id}/registrar-desligamento`),
+  /** Falha com 409 UNIFICACAO_NAO_FEITA se a unificação ainda não foi confirmada. */
+  solicitarDesligamento: (id: number, data?: string) =>
+    api.post<Unificacao>(`/api/unificacoes/${id}/solicitar-desligamento`, { data }),
+  /** A equipe de campo não realizou o desligamento. */
+  abrirOrdemDeServico: (id: number) =>
+    api.post<Unificacao>(`/api/unificacoes/${id}/abrir-os`),
+  concluirDesligamento: (id: number, data?: string) =>
+    api.post<Unificacao>(`/api/unificacoes/${id}/concluir-desligamento`, { data }),
 };
 
 // ---------- Dashboard ----------
@@ -244,6 +257,7 @@ interface DashboardResposta {
     envioAteAprovacao: number | null;
     paradoPorDebito: number | null;
     instalacaoAteSolicitarVistoria: number | null;
+    esperaDoDesligamento: number | null;
     cicloCompleto: number | null;
   };
   quantitativos: {
@@ -259,6 +273,9 @@ interface DashboardResposta {
     vistoriasAprovadas: number;
     vistoriasReprovadas: number;
     unificacoesPendentes: number;
+    desligamentosAguardando: number;
+    desligamentosComOsAberta: number;
+    desligamentosConcluidos: number;
   };
 }
 
@@ -277,6 +294,7 @@ export const dashboardApi = {
       tempoMedioParaAprovacaoDias: r.temposMediosEmDias.envioAteAprovacao,
       tempoMedioParadoDebitoDias: r.temposMediosEmDias.paradoPorDebito,
       tempoMedioInstalacaoVistoriaDias: r.temposMediosEmDias.instalacaoAteSolicitarVistoria,
+      tempoMedioEsperaDesligamentoDias: r.temposMediosEmDias.esperaDoDesligamento,
       tempoMedioCicloCompletoDias: r.temposMediosEmDias.cicloCompleto,
       pendenciasAbertasNoPeriodo: r.quantitativos.pendenciasAbertasNoPeriodo,
       pendenciasResolvidas: r.quantitativos.pendenciasResolvidas,
@@ -290,6 +308,9 @@ export const dashboardApi = {
       vistoriasAprovadas: r.quantitativos.vistoriasAprovadas,
       vistoriasReprovadas: r.quantitativos.vistoriasReprovadas,
       unificacoesPendentes: r.quantitativos.unificacoesPendentes,
+      desligamentosAguardando: r.quantitativos.desligamentosAguardando,
+      desligamentosComOsAberta: r.quantitativos.desligamentosComOsAberta,
+      desligamentosConcluidos: r.quantitativos.desligamentosConcluidos,
     };
   },
 };

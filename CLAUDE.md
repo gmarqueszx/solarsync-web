@@ -64,6 +64,7 @@ as regras de negócio, que chegam como 409 com texto pronto:
 | `PROJETO_SEM_INSTALACAO` | vistoria exige a data de instalação registrada antes |
 | `TRANSICAO_INVALIDA` | o status atual não permite aquela mudança |
 | `ACESSO_NEGADO` | o papel do usuário não permite a ação |
+| `UNIFICACAO_NAO_FEITA` | o desligamento só é pedido depois de confirmada a unificação |
 
 Componentes **não** devem mostrar toast próprio depois de uma mutação: duplicaria a mensagem.
 
@@ -82,6 +83,12 @@ Estilo Navan em paleta verde, já configurado em `tailwind.config.js` como `sola
 - destaque `#1EFC1E` **apenas** para indicador ativo e badge "novo" — nunca fundo de botão ou texto
 - superfície branca, fundo `#F4F6F8`, quase-preto `#13151A`
 - Inter, pesos 400/500; cards com raio 14px; tabelas com divisores sutis; status em badge pílula
+
+## Conhecido, e ainda não resolvido
+
+**Datas aparecem no formato ISO** (`2026-08-20`) em todas as telas: o protótipo renderizava a
+string crua e mantivemos a convenção para não criar exceção num módulo só. Vale uma passada
+aplicando `DD/MM/AAAA` em todos os módulos de uma vez.
 
 ## Pendente
 

@@ -96,7 +96,9 @@ interface AppContextType {
   }) => Promise<void>;
   concluirUnificacao: (id: number) => Promise<void>;
   reabrirUnificacao: (id: number) => Promise<void>;
-  registrarDesligamento: (id: number) => Promise<void>;
+  solicitarDesligamento: (id: number) => Promise<void>;
+  abrirOrdemDeServico: (id: number) => Promise<void>;
+  concluirDesligamento: (id: number) => Promise<void>;
 
   toasts: ToastInfo[];
   removerToast: (id: string) => void;
@@ -337,8 +339,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       executar(() => unificacoesApi.concluir(id), 'Unificação concluída'),
     reabrirUnificacao: (id) =>
       executar(() => unificacoesApi.reabrir(id), 'Unificação reaberta'),
-    registrarDesligamento: (id) =>
-      executar(() => unificacoesApi.registrarDesligamento(id), 'Desligamento registrado'),
+    solicitarDesligamento: (id) =>
+      executar(
+        () => unificacoesApi.solicitarDesligamento(id),
+        'Desligamento solicitado — aguardando a equipe de campo',
+      ),
+    abrirOrdemDeServico: (id) =>
+      executar(() => unificacoesApi.abrirOrdemDeServico(id), 'O.S. registrada'),
+    concluirDesligamento: (id) =>
+      executar(() => unificacoesApi.concluirDesligamento(id), 'Medidor desligado'),
 
     toasts,
     removerToast,
