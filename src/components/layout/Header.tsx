@@ -1,10 +1,11 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
-import { Papel } from '../../types';
-import { Shield, ChevronDown } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { Shield, LogOut } from 'lucide-react';
 
 export const Header: React.FC = () => {
-  const { papel, trocarPapel, usuarioAtual, moduloAtivo } = useApp();
+  const { moduloAtivo } = useApp();
+  const { usuario, papel, sair } = useAuth();
 
   const titulosModulo: Record<string, { titulo: string; descricao: string }> = {
     dashboard: {
@@ -49,7 +50,7 @@ export const Header: React.FC = () => {
           <span className="text-slate-300">/</span>
           <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
             <span className="w-1.5 h-1.5 rounded-full bg-[#1EFC1E]" />
-            Protótipo UI/UX
+            Dados ao vivo
           </span>
         </div>
         <h2 className="text-lg font-medium text-slate-800 tracking-tight mt-0.5">
@@ -60,33 +61,21 @@ export const Header: React.FC = () => {
         </p>
       </div>
 
-      {/* Right Controls: Role Switcher & User Profile */}
+      {/* Right Controls: Current Role & User Profile */}
       <div className="flex items-center gap-3 self-end md:self-auto">
-        {/* Role Selector Box */}
+        {/* Current Role Box */}
         <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-xs">
           <div className="flex items-center gap-1.5 text-xs text-[#424342]">
             <Shield className="w-3.5 h-3.5 text-[#149911]" />
-            <span className="font-normal">Simular Papel:</span>
+            <span className="font-normal">Papel:</span>
           </div>
-
-          <div className="relative">
-            <select
-              value={papel}
-              onChange={(e) => trocarPapel(e.target.value as Papel)}
-              className="appearance-none bg-white text-xs font-medium text-slate-800 border border-slate-200 rounded-lg pl-2.5 pr-7 py-1 focus:outline-none focus:ring-1 focus:ring-[#149911] focus:border-[#149911] cursor-pointer"
-            >
-              <option value="GESTOR">GESTOR (Visão Total + KPIs)</option>
-              <option value="ADMINISTRADOR">ADMINISTRADOR (Total)</option>
-              <option value="ANALISTA">ANALISTA (Operacional)</option>
-            </select>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
+          <span className="text-xs font-medium text-slate-800">{papel}</span>
         </div>
 
         {/* User Card */}
         <div className="flex items-center gap-2.5 pl-2 border-l border-slate-200">
           <div className="w-8 h-8 rounded-full bg-[#244F26] text-white text-xs font-medium flex items-center justify-center border border-emerald-600/30 shadow-xs">
-            {usuarioAtual.nome
+            {(usuario?.nome ?? '')
               .split(' ')
               .map(n => n[0])
               .slice(0, 2)
@@ -94,12 +83,20 @@ export const Header: React.FC = () => {
           </div>
           <div className="hidden sm:block text-left">
             <div className="text-xs font-medium text-slate-800 leading-tight">
-              {usuarioAtual.nome}
+              {usuario?.nome}
             </div>
             <div className="text-[10px] text-[#424342] leading-tight flex items-center gap-1">
-              <span>{usuarioAtual.cargo}</span>
+              <span>{usuario?.email}</span>
             </div>
           </div>
+
+          <button
+            onClick={sair}
+            title="Sair do sistema"
+            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </header>

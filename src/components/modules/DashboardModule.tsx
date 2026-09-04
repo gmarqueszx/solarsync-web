@@ -2,6 +2,7 @@ import React from 'react';
 import { useApp } from '../../context/AppContext';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
+import { ROTULO_TIPO_PROJETO, TipoProjeto } from '../../types';
 import {
   Clock,
   CheckCircle2,
@@ -9,6 +10,7 @@ import {
   Send,
   FileCheck2,
   TrendingUp,
+  Wrench,
   Zap,
   ArrowUpRight,
   Flame,
@@ -16,6 +18,22 @@ import {
 
 export const DashboardModule: React.FC = () => {
   const { kpis, projetos, pendencias } = useApp();
+
+  // Sem KPIs não há painel: ou ainda está carregando, ou o papel não tem acesso à métrica.
+  if (!kpis) {
+    return (
+      <Card className="p-10">
+        <div className="text-center space-y-1">
+          <div className="text-sm font-medium text-slate-700">
+            Indicadores indisponíveis no momento
+          </div>
+          <p className="text-xs text-[#424342]">
+            O painel executivo é restrito a Gestor e Administrador.
+          </p>
+        </div>
+      </Card>
+    );
+  }
 
   // Metrics for cycle times
   const metricasTempo = [
@@ -65,6 +83,17 @@ export const DashboardModule: React.FC = () => {
       descricao: 'Dias que o projeto fica travado aguardando o cliente pagar faturas atrasadas.',
     },
     {
+      titulo: 'Instalação → Vistoria',
+      subtitulo: 'Usina pronta → Solicitação',
+      dias: kpis.tempoMedioInstalacaoVistoriaDias,
+      meta: 'Meta ≤ 7 dias',
+      status: 'atencao',
+      icone: Wrench,
+      descricao:
+        'Dias entre a usina ficar instalada e alguém pedir a vistoria à Coelba. '
+        + 'É o intervalo em que o cliente já pagou, já tem a usina no telhado e ainda não gera.',
+    },
+    {
       titulo: 'Ciclo Completo de Homologação',
       subtitulo: 'Entrada → Troca do Medidor',
       dias: kpis.tempoMedioCicloCompletoDias,
@@ -75,28 +104,28 @@ export const DashboardModule: React.FC = () => {
     },
   ];
 
-  // Distribution by Analyst
-  const analistas = ['Ivan Silva', 'Larissa Moura', 'Camila Bastos'];
+  // Distribution by Analyst — os analistas vêm dos próprios projetos, não de uma lista fixa.
+  const analistas = Array.from(
+    new Set(projetos.map(p => p.analistaResponsavel?.nome ?? 'Sem analista atribuído')),
+  );
   const cargaAnalistas = analistas.map(analista => {
-    const total = projetos.filter(p => p.analista_responsavel === analista).length;
-    const aprovados = projetos.filter(p => p.analista_responsavel === analista && p.status === 'APROVADO').length;
-    const emAndamento = projetos.filter(p => p.analista_responsavel === analista && p.status !== 'APROVADO').length;
-    return { analista, total, aprovados, emAndamento };
+    const doAnalista = projetos.filter(
+      p => (p.analistaResponsavel?.nome ?? 'Sem analista atribuído') === analista,
+    );
+    const aprovados = doAnalista.filter(p => p.status === 'APROVADO').length;
+    return {
+      analista,
+      total: doAnalista.length,
+      aprovados,
+      emAndamento: doAnalista.length - aprovados,
+    };
   });
 
   // Distribution by Project Type
-  const tiposProjeto = [
-    { tipo: 'PADRAO', label: 'Padrão' },
-    { tipo: 'AMPLIACAO', label: 'Ampliação' },
-    { tipo: 'AUMENTO_POTENCIA', label: 'Aumento de Potência' },
-    { tipo: 'MUDANCA_INVERSOR', label: 'Mudança de Inversor' },
-    { tipo: 'UMA_PLACA_A_MAIS', label: 'Uma Placa a Mais' },
-    { tipo: 'INVERSORES_SEPARADOS', label: 'Inversores Separados' },
-  ];
-
-  const contagemTipos = tiposProjeto.map(t => ({
-    ...t,
-    quantidade: projetos.filter(p => p.tipo_projeto === t.tipo).length,
+  const contagemTipos = (Object.keys(ROTULO_TIPO_PROJETO) as TipoProjeto[]).map(tipo => ({
+    tipo,
+    label: ROTULO_TIPO_PROJETO[tipo],
+    quantidade: projetos.filter(p => p.tipoProjeto === tipo).length,
   }));
 
   const maxQtdTipo = Math.max(...contagemTipos.map(t => t.quantidade), 1);
@@ -192,10 +221,10 @@ export const DashboardModule: React.FC = () => {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-semibold text-slate-800 tracking-tight">
-              {pendencias.length - kpis.pendenciasResolvidas}
+              {pendencias.filter(p => p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO').length}
             </span>
             <span className="text-xs text-amber-700 font-medium">
-              de {kpis.pendenciasTotal} totais
+              de {kpis.pendenciasAbertasNoPeriodo} abertas no período
             </span>
           </div>
           <p className="text-[11px] text-slate-400 mt-1">
@@ -261,11 +290,14 @@ export const DashboardModule: React.FC = () => {
                   <div className="text-[11px] text-[#424342]">{item.subtitulo}</div>
                 </div>
 
+                {/* Tempo nulo = não houve caso no período. Mostrar 0 leria "instantâneo". */}
                 <div className="mt-2.5 flex items-baseline gap-2">
                   <span className="text-3xl font-bold text-slate-800 tracking-tight">
-                    {item.dias}
+                    {item.dias ?? '—'}
                   </span>
-                  <span className="text-xs font-medium text-slate-500">dias úteis (média)</span>
+                  <span className="text-xs font-medium text-slate-500">
+                    {item.dias === null ? 'sem casos no período' : 'dias úteis (média)'}
+                  </span>
                 </div>
 
                 <p className="text-[11px] text-slate-500 mt-2 line-clamp-2 leading-relaxed border-t border-slate-100 pt-2">

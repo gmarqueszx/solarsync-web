@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Unificacao } from '../../types';
 import { Card } from '../common/Card';
@@ -19,10 +19,21 @@ export const UnificacaoModule: React.FC = () => {
   const {
     unificacoes,
     clientes,
-    adicionarUnificacao,
-    alternarUnificacaoFeita,
-    alternarUnificacaoDesligamento,
+    usuarios,
+    criarUnificacao,
+    concluirUnificacao,
+    reabrirUnificacao,
+    registrarDesligamento,
   } = useApp();
+
+  /** A linha traz só o resumo do cliente; vendedor vem do cadastro completo. */
+  const vendedorDoCliente = useMemo(() => {
+    const mapa = new Map(clientes.map(c => [c.id, c.vendedor]));
+    return (clienteId: number) => mapa.get(clienteId) ?? null;
+  }, [clientes]);
+
+  const alternarUnificacaoFeita = (u: Unificacao) =>
+    u.feita ? reabrirUnificacao(u.id) : concluirUnificacao(u.id);
 
   const [busca, setBusca] = useState('');
   const [filtroFeita, setFiltroFeita] = useState<string>('TODOS');
@@ -36,20 +47,25 @@ export const UnificacaoModule: React.FC = () => {
   const [isModalNovoAberto, setIsModalNovoAberto] = useState(false);
 
   // Form New Unificacao
-  const [novoClienteId, setNovoClienteId] = useState(clientes[0]?.id || '');
-  const [novoProjetista, setNovoProjetista] = useState('Igor Rocha');
+  const [novoClienteId, setNovoClienteId] = useState<number | ''>('');
+  const [novoProjetistaId, setNovoProjetistaId] = useState<number | ''>('');
   const [novasInformacoes, setNovasInformacoes] = useState('');
-  const [novoPrecisaDesligamento, setNovoPrecisaDesligamento] = useState(true);
+
+  // A lista de clientes chega da API depois da primeira renderização: sincroniza o padrão.
+  useEffect(() => {
+    setNovoClienteId(atual => (atual === '' && clientes.length > 0 ? clientes[0].id : atual));
+  }, [clientes]);
 
   // Filtering
   const unificacoesFiltradas = useMemo(() => {
+    const termo = busca.toLowerCase();
     return unificacoes.filter(u => {
       const matchTexto =
-        u.cliente.nome.toLowerCase().includes(busca.toLowerCase()) ||
-        u.cidade.toLowerCase().includes(busca.toLowerCase()) ||
-        u.projetista.toLowerCase().includes(busca.toLowerCase()) ||
-        u.informacoes.toLowerCase().includes(busca.toLowerCase()) ||
-        (u.cliente.uc_coelba && u.cliente.uc_coelba.includes(busca));
+        u.cliente.nome.toLowerCase().includes(termo) ||
+        (u.cidade ?? '').toLowerCase().includes(termo) ||
+        (u.projetista?.nome ?? '').toLowerCase().includes(termo) ||
+        (u.informacoes ?? '').toLowerCase().includes(termo) ||
+        (u.cliente.ucCoelba != null && u.cliente.ucCoelba.includes(busca));
 
       const matchFeita =
         filtroFeita === 'TODOS' ||
@@ -70,22 +86,21 @@ export const UnificacaoModule: React.FC = () => {
     return unificacoesFiltradas.slice(inicio, inicio + itensPorPagina);
   }, [unificacoesFiltradas, pagina]);
 
-  const handleSalvarNovo = (e: React.FormEvent) => {
+  const handleSalvarNovo = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cliente = clientes.find(c => c.id === novoClienteId) || clientes[0];
+    if (novoClienteId === '') return;
 
-    adicionarUnificacao({
-      cliente_id: cliente.id,
-      cliente,
-      cidade: cliente.cidade,
-      projetista: novoProjetista,
-      informacoes: novasInformacoes || 'Unificação de ramal de medição solicitada.',
-      feita: false,
-      desligamento: novoPrecisaDesligamento,
-    });
-
-    setIsModalNovoAberto(false);
-    setNovasInformacoes('');
+    try {
+      await criarUnificacao({
+        clienteId: novoClienteId,
+        projetistaId: novoProjetistaId === '' ? null : novoProjetistaId,
+        informacoes: novasInformacoes || null,
+      });
+      setIsModalNovoAberto(false);
+      setNovasInformacoes('');
+    } catch {
+      // O AppContext já mostrou o motivo da recusa; o modal fica aberto para correção.
+    }
   };
 
   return (
@@ -106,9 +121,9 @@ export const UnificacaoModule: React.FC = () => {
 
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
           <div>
-            <span className="text-xs text-[#424342]">Desligamentos Programados</span>
+            <span className="text-xs text-[#424342]">Desligamentos Registrados</span>
             <div className="text-xl font-semibold text-amber-700 mt-1">
-              {unificacoes.filter(u => u.desligamento && !u.feita).length} pendentes
+              {unificacoes.filter(u => u.desligamento).length} medidores
             </div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
@@ -170,7 +185,7 @@ export const UnificacaoModule: React.FC = () => {
             className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-xs"
           >
             <option value="TODOS">Todos Desligamentos</option>
-            <option value="SIM">Requer Desligamento</option>
+            <option value="SIM">Desligamento Registrado</option>
             <option value="NAO">Sem Desligamento</option>
           </select>
 
@@ -197,7 +212,7 @@ export const UnificacaoModule: React.FC = () => {
                 <th className="py-3 px-4">Projetista Responsável</th>
                 <th className="py-3 px-6">Informações Técnicas</th>
                 <th className="py-3 px-4 text-center">Unificação Feita?</th>
-                <th className="py-3 px-4 text-center">Desligamento Físico?</th>
+                <th className="py-3 px-4 text-center">Desligamento Físico</th>
                 <th className="py-3 px-6 text-right">Ações</th>
               </tr>
             </thead>
@@ -216,22 +231,22 @@ export const UnificacaoModule: React.FC = () => {
                       <div className="text-[11px] text-[#424342] flex items-center gap-2 mt-0.5">
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-slate-400" />
-                          {u.cidade}
+                          {u.cidade ?? '—'}
                         </span>
-                        {u.cliente.uc_coelba && (
-                          <span className="text-slate-400">UC: {u.cliente.uc_coelba}</span>
+                        {u.cliente.ucCoelba && (
+                          <span className="text-slate-400">UC: {u.cliente.ucCoelba}</span>
                         )}
                       </div>
                     </td>
                     <td className="py-3.5 px-4 font-medium text-slate-700">
-                      {u.projetista}
+                      {u.projetista?.nome ?? '—'}
                     </td>
                     <td className="py-3.5 px-6 max-w-xs truncate text-slate-600">
-                      {u.informacoes}
+                      {u.informacoes ?? '—'}
                     </td>
                     <td className="py-3.5 px-4 text-center">
                       <button
-                        onClick={() => alternarUnificacaoFeita(u.id)}
+                        onClick={() => alternarUnificacaoFeita(u).catch(() => {})}
                         className="inline-flex items-center gap-1.5 focus:outline-none"
                         title="Clique para alternar status de conclusão"
                       >
@@ -243,17 +258,18 @@ export const UnificacaoModule: React.FC = () => {
                       </button>
                     </td>
                     <td className="py-3.5 px-4 text-center">
-                      <button
-                        onClick={() => alternarUnificacaoDesligamento(u.id)}
-                        className="inline-flex items-center gap-1.5 focus:outline-none"
-                        title="Clique para alternar se necessita desligamento físico"
-                      >
-                        {u.desligamento ? (
-                          <Badge variant="danger">Requer Desligamento</Badge>
-                        ) : (
-                          <Badge variant="neutral">Não Requer</Badge>
-                        )}
-                      </button>
+                      {/* O desligamento é um registro, não um interruptor: só se marca uma vez. */}
+                      {u.desligamento ? (
+                        <Badge variant="success">Desligamento Feito</Badge>
+                      ) : (
+                        <button
+                          onClick={() => registrarDesligamento(u.id).catch(() => {})}
+                          className="inline-flex items-center gap-1.5 focus:outline-none"
+                          title="Registrar desligamento físico do medidor"
+                        >
+                          <Badge variant="neutral">Registrar Desligamento</Badge>
+                        </button>
+                      )}
                     </td>
                     <td className="py-3.5 px-6 text-right">
                       <button
@@ -310,7 +326,7 @@ export const UnificacaoModule: React.FC = () => {
             setUnificacaoSelecionada(null);
           }}
           title={`Unificação — ${unificacaoSelecionada.cliente.nome}`}
-          subtitle={`Projetista: ${unificacaoSelecionada.projetista} · ${unificacaoSelecionada.cidade}`}
+          subtitle={`Projetista: ${unificacaoSelecionada.projetista?.nome ?? '—'} · ${unificacaoSelecionada.cidade ?? '—'}`}
           footer={
             <>
               <button
@@ -320,11 +336,32 @@ export const UnificacaoModule: React.FC = () => {
               >
                 Fechar
               </button>
+              {!unificacaoSelecionada.desligamento && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await registrarDesligamento(unificacaoSelecionada.id);
+                      setIsModalDetalheAberto(false);
+                    } catch {
+                      /* toast de erro já exibido pelo contexto */
+                    }
+                  }}
+                  className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors flex items-center gap-1.5"
+                >
+                  <PowerOff className="w-4 h-4" />
+                  Registrar Desligamento
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => {
-                  alternarUnificacaoFeita(unificacaoSelecionada.id);
-                  setIsModalDetalheAberto(false);
+                onClick={async () => {
+                  try {
+                    await alternarUnificacaoFeita(unificacaoSelecionada);
+                    setIsModalDetalheAberto(false);
+                  } catch {
+                    /* toast de erro já exibido pelo contexto */
+                  }
                 }}
                 className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs"
               >
@@ -337,10 +374,10 @@ export const UnificacaoModule: React.FC = () => {
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100 space-y-2 text-xs">
               <div className="font-medium text-slate-800">Dados do Cliente & Contrato</div>
               <div className="grid grid-cols-2 gap-2 text-slate-600">
-                <div>Cidade: <strong className="text-slate-800">{unificacaoSelecionada.cidade}</strong></div>
-                <div>Vendedor: <strong className="text-slate-800">{unificacaoSelecionada.cliente.vendedor}</strong></div>
-                <div>Projetista: <strong className="text-slate-800">{unificacaoSelecionada.projetista}</strong></div>
-                <div>UC Principal: <strong className="text-slate-800">{unificacaoSelecionada.cliente.uc_coelba || 'N/A'}</strong></div>
+                <div>Cidade: <strong className="text-slate-800">{unificacaoSelecionada.cidade ?? '—'}</strong></div>
+                <div>Vendedor: <strong className="text-slate-800">{vendedorDoCliente(unificacaoSelecionada.cliente.id) ?? '—'}</strong></div>
+                <div>Projetista: <strong className="text-slate-800">{unificacaoSelecionada.projetista?.nome ?? '—'}</strong></div>
+                <div>UC Principal: <strong className="text-slate-800">{unificacaoSelecionada.cliente.ucCoelba || 'N/A'}</strong></div>
               </div>
             </div>
 
@@ -357,9 +394,9 @@ export const UnificacaoModule: React.FC = () => {
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
                 <span className="text-xs text-slate-500 block mb-1">Desligamento Físico de Medidor</span>
                 {unificacaoSelecionada.desligamento ? (
-                  <Badge variant="danger">Requer Desligamento / O.S.</Badge>
+                  <Badge variant="success">Desligamento Feito</Badge>
                 ) : (
-                  <Badge variant="neutral">Não Requer Desligamento</Badge>
+                  <Badge variant="neutral">Aguardando Desligamento / O.S.</Badge>
                 )}
               </div>
             </div>
@@ -369,7 +406,7 @@ export const UnificacaoModule: React.FC = () => {
                 Instruções e Informações Técnicas da Unificação
               </label>
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 leading-relaxed">
-                {unificacaoSelecionada.informacoes}
+                {unificacaoSelecionada.informacoes || 'Sem informações técnicas registradas.'}
               </div>
             </div>
           </div>
@@ -408,12 +445,12 @@ export const UnificacaoModule: React.FC = () => {
             </label>
             <select
               value={novoClienteId}
-              onChange={(e) => setNovoClienteId(e.target.value)}
+              onChange={(e) => setNovoClienteId(e.target.value === '' ? '' : Number(e.target.value))}
               className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
             >
               {clientes.map(c => (
                 <option key={c.id} value={c.id}>
-                  {c.nome} ({c.cidade} — Vendedor: {c.vendedor})
+                  {c.nome} ({c.cidade ?? 'Sem cidade'} — Vendedor: {c.vendedor ?? '—'})
                 </option>
               ))}
             </select>
@@ -424,14 +461,18 @@ export const UnificacaoModule: React.FC = () => {
               Projetista Responsável
             </label>
             <select
-              value={novoProjetista}
-              onChange={(e) => setNovoProjetista(e.target.value)}
+              value={novoProjetistaId}
+              onChange={(e) =>
+                setNovoProjetistaId(e.target.value === '' ? '' : Number(e.target.value))
+              }
               className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
             >
-              <option value="Igor Rocha">Igor Rocha</option>
-              <option value="Ivan Silva">Ivan Silva</option>
-              <option value="Larissa Moura">Larissa Moura</option>
-              <option value="Camila Bastos">Camila Bastos</option>
+              <option value="">Sem projetista definido</option>
+              {usuarios.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.nome}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -449,17 +490,9 @@ export const UnificacaoModule: React.FC = () => {
             />
           </div>
 
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="checkbox"
-              id="check-desligamento"
-              checked={novoPrecisaDesligamento}
-              onChange={(e) => setNovoPrecisaDesligamento(e.target.checked)}
-              className="w-4 h-4 text-[#149911] rounded border-slate-300 focus:ring-[#149911]"
-            />
-            <label htmlFor="check-desligamento" className="text-slate-700 font-medium">
-              Requer desligamento físico de medidor / abertura de O.S.
-            </label>
+          <div className="text-[11px] text-[#424342] bg-emerald-50 p-2.5 rounded-lg border border-emerald-100">
+            💡 <strong>Regra de Negócio:</strong> O desligamento físico do medidor é registrado
+            depois, na própria linha da unificação, quando a O.S. é executada pela Coelba.
           </div>
         </form>
       </Modal>

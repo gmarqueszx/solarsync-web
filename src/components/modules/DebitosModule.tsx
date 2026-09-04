@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Debito, StatusDebito } from '../../types';
+import { Debito, ROTULO_STATUS_DEBITO, StatusDebito } from '../../types';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -17,7 +17,20 @@ import {
 } from 'lucide-react';
 
 export const DebitosModule: React.FC = () => {
-  const { debitos, alternarStatusDebito } = useApp();
+  const { debitos, clientes, registrarConsultaDebito } = useApp();
+
+  /** A linha de débito traz só o resumo do cliente; vendedor vem do cadastro completo. */
+  const vendedorDoCliente = useMemo(() => {
+    const mapa = new Map(clientes.map(c => [c.id, c.vendedor]));
+    return (clienteId: number) => mapa.get(clienteId) ?? null;
+  }, [clientes]);
+
+  /** Inverte o status: é como o analista dá baixa depois de consultar a Agência Virtual. */
+  const alternarStatusDebito = (debito: Debito) =>
+    registrarConsultaDebito(
+      debito.cliente.id,
+      debito.status === 'ATIVO' ? 'QUITADO' : 'ATIVO',
+    );
 
   const [busca, setBusca] = useState('');
   const [filtroStatus, setFiltroStatus] = useState<string>('TODOS');
@@ -30,17 +43,18 @@ export const DebitosModule: React.FC = () => {
 
   // Filtering
   const debitosFiltrados = useMemo(() => {
+    const termo = busca.toLowerCase();
     return debitos.filter(d => {
       const matchTexto =
-        d.cliente.nome.toLowerCase().includes(busca.toLowerCase()) ||
-        d.cliente.cidade.toLowerCase().includes(busca.toLowerCase()) ||
-        d.cliente.vendedor.toLowerCase().includes(busca.toLowerCase()) ||
-        (d.cliente.uc_coelba && d.cliente.uc_coelba.includes(busca));
+        d.cliente.nome.toLowerCase().includes(termo) ||
+        (d.cliente.cidade ?? '').toLowerCase().includes(termo) ||
+        (vendedorDoCliente(d.cliente.id) ?? '').toLowerCase().includes(termo) ||
+        (d.cliente.ucCoelba != null && d.cliente.ucCoelba.includes(busca));
 
       const matchStatus = filtroStatus === 'TODOS' || d.status === filtroStatus;
       return matchTexto && matchStatus;
     });
-  }, [debitos, busca, filtroStatus]);
+  }, [debitos, busca, filtroStatus, vendedorDoCliente]);
 
   // Pagination
   const totalPaginas = Math.ceil(debitosFiltrados.length / itensPorPagina) || 1;
@@ -51,9 +65,9 @@ export const DebitosModule: React.FC = () => {
 
   const getStatusBadge = (status: StatusDebito) => {
     if (status === 'QUITADO') {
-      return <Badge variant="success">Quitado / Regular</Badge>;
+      return <Badge variant="success">{ROTULO_STATUS_DEBITO.QUITADO} / Regular</Badge>;
     }
-    return <Badge variant="danger">Débito Ativo</Badge>;
+    return <Badge variant="danger">Débito {ROTULO_STATUS_DEBITO.ATIVO}</Badge>;
   };
 
   return (
@@ -144,14 +158,13 @@ export const DebitosModule: React.FC = () => {
                 <th className="py-3 px-4">Vendedor Responsável</th>
                 <th className="py-3 px-4">Status no Portal Coelba</th>
                 <th className="py-3 px-4">Última Consulta</th>
-                <th className="py-3 px-4">Valor Estimado</th>
                 <th className="py-3 px-6 text-right">Ação / Baixa</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {debitosPaginados.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400">
+                  <td colSpan={5} className="py-8 text-center text-slate-400">
                     Nenhum registro de débito encontrado com os filtros atuais.
                   </td>
                 </tr>
@@ -163,15 +176,15 @@ export const DebitosModule: React.FC = () => {
                       <div className="text-[11px] text-[#424342] flex items-center gap-2 mt-0.5">
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-slate-400" />
-                          {d.cliente.cidade}
+                          {d.cliente.cidade ?? '—'}
                         </span>
-                        {d.cliente.uc_coelba && (
-                          <span className="text-slate-400">UC: {d.cliente.uc_coelba}</span>
+                        {d.cliente.ucCoelba && (
+                          <span className="text-slate-400">UC: {d.cliente.ucCoelba}</span>
                         )}
                       </div>
                     </td>
                     <td className="py-3.5 px-4 text-slate-600">
-                      {d.cliente.vendedor}
+                      {vendedorDoCliente(d.cliente.id) ?? '—'}
                     </td>
                     <td className="py-3.5 px-4">
                       {getStatusBadge(d.status)}
@@ -179,22 +192,13 @@ export const DebitosModule: React.FC = () => {
                     <td className="py-3.5 px-4 text-slate-500">
                       <div className="flex items-center gap-1">
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                        <span>{d.ultima_consulta_em}</span>
+                        <span>{d.ultimaConsultaEm ?? '—'}</span>
                       </div>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {d.status === 'ATIVO' && d.valor_debito ? (
-                        <span className="font-medium text-rose-600">
-                          R$ {d.valor_debito.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 font-normal">R$ 0,00</span>
-                      )}
                     </td>
                     <td className="py-3.5 px-6 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button
-                          onClick={() => alternarStatusDebito(d.id)}
+                          onClick={() => alternarStatusDebito(d).catch(() => {})}
                           className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border ${
                             d.status === 'ATIVO'
                               ? 'bg-emerald-50 text-[#149911] border-emerald-200 hover:bg-emerald-100'
@@ -272,9 +276,13 @@ export const DebitosModule: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  alternarStatusDebito(debitoSelecionado.id);
-                  setIsModalDetalheAberto(false);
+                onClick={async () => {
+                  try {
+                    await alternarStatusDebito(debitoSelecionado);
+                    setIsModalDetalheAberto(false);
+                  } catch {
+                    /* toast de erro já exibido pelo contexto */
+                  }
                 }}
                 className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs"
               >
@@ -289,10 +297,10 @@ export const DebitosModule: React.FC = () => {
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100 space-y-1.5 text-xs">
               <div className="font-medium text-slate-800">Dados da Unidade Consumidora (UC)</div>
               <div className="grid grid-cols-2 gap-2 text-slate-600">
-                <div>Cidade: <strong className="text-slate-800">{debitoSelecionado.cliente.cidade}</strong></div>
-                <div>Vendedor: <strong className="text-slate-800">{debitoSelecionado.cliente.vendedor}</strong></div>
-                <div>UC Coelba: <strong className="text-slate-800">{debitoSelecionado.cliente.uc_coelba || 'N/A'}</strong></div>
-                <div>Última Checagem: <strong className="text-slate-800">{debitoSelecionado.ultima_consulta_em}</strong></div>
+                <div>Cidade: <strong className="text-slate-800">{debitoSelecionado.cliente.cidade ?? '—'}</strong></div>
+                <div>Vendedor: <strong className="text-slate-800">{vendedorDoCliente(debitoSelecionado.cliente.id) ?? '—'}</strong></div>
+                <div>UC Coelba: <strong className="text-slate-800">{debitoSelecionado.cliente.ucCoelba || 'N/A'}</strong></div>
+                <div>Última Checagem: <strong className="text-slate-800">{debitoSelecionado.ultimaConsultaEm ?? '—'}</strong></div>
               </div>
             </div>
 
@@ -300,22 +308,13 @@ export const DebitosModule: React.FC = () => {
               <div className="font-medium text-slate-700">Status Financeiro</div>
               <div className="flex items-center justify-between">
                 <div>{getStatusBadge(debitoSelecionado.status)}</div>
-                {debitoSelecionado.valor_debito ? (
-                  <div className="text-base font-semibold text-rose-600">
-                    R$ {debitoSelecionado.valor_debito.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                {debitoSelecionado.status === 'ATIVO' ? (
+                  <div className="text-xs text-rose-600 font-medium">
+                    Débito em aberto bloqueia o envio da ART
                   </div>
                 ) : (
                   <div className="text-xs text-emerald-700 font-medium">Nenhum débito em aberto</div>
                 )}
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-slate-700 block">
-                Histórico & Observações
-              </label>
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 leading-relaxed">
-                {debitoSelecionado.observacao || 'Sem observações adicionais registradas.'}
               </div>
             </div>
           </div>

@@ -16,7 +16,9 @@ import {
 export const Sidebar: React.FC = () => {
   const { papel, moduloAtivo, setModuloAtivo, pendencias, debitos, projetos, vistorias, unificacoes } = useApp();
 
-  const pendenciasAtivas = pendencias.filter(p => p.status !== 'RESOLVIDA').length;
+  const pendenciasAtivas = pendencias.filter(
+    p => p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO',
+  ).length;
   const debitosAtivos = debitos.filter(d => d.status === 'ATIVO').length;
   const projetosEmAndamento = projetos.filter(p => p.status !== 'APROVADO').length;
   const vistoriasPendentes = vistorias.filter(v => v.status === 'SOLICITADA').length;
@@ -164,10 +166,15 @@ export const Sidebar: React.FC = () => {
       <div className="p-3 border-t border-[#1d401f]/80 bg-[#1e4320]/60 text-xs">
         <div className="p-2.5 rounded-lg bg-black/20 text-white/80 flex flex-col gap-1">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase font-medium text-white/50">Conexão Coelba</span>
+            {/*
+              Era "Conexão Coelba: Mock Ativo". Trocado porque o sistema não tem integração
+              com a Coelba — o contato com a concessionária é manual —, e anunciar uma conexão
+              que não existe faria o analista supor que o status chega de lá automaticamente.
+            */}
+            <span className="text-[10px] uppercase font-medium text-white/50">API SolarSync</span>
             <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300">
               <span className="w-1.5 h-1.5 rounded-full bg-[#1EFC1E]" />
-              Mock Ativo
+              Conectada
             </span>
           </div>
           <div className="flex items-center gap-1 text-[11px] text-white/90">
