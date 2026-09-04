@@ -178,5 +178,5 @@ SaaS multi-cliente); o 5 é opcional; os outros 9 valem para o SolarSync.
 
 1. Fechar modelo de dados (DDL inicial + Flyway migration V1)
 2. Definir contratos REST (OpenAPI) para cada módulo
-3. Prototipar dashboard com dados mockados até planilha ser migrada
+3. Prototipar frontend/dashboard com dados mockados e RBAC visual (**Concluído** — React + TS + Tailwind + Vite rodando com os 6 módulos integrados)
 4. Escrever script de importação da planilha atual para o banco novo
