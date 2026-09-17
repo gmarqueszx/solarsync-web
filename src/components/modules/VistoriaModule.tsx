@@ -1,9 +1,19 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { ROTULO_STATUS_VISTORIA, ROTULO_TIPO_PROJETO, StatusVistoria, Vistoria } from '../../types';
+import {
+  Cliente,
+  ProjetoLista,
+  ROTULO_STATUS_VISTORIA,
+  ROTULO_TIPO_PROJETO,
+  StatusVistoria,
+  Vistoria,
+} from '../../types';
+import { diasDesde, formatarData, textoDiasParado } from '../../utils/data';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { ClienteModal } from '../common/ClienteModal';
+import { Botao } from '../ui/Button';
 import {
   Search,
   Plus,
@@ -12,18 +22,43 @@ import {
   RotateCcw,
   MapPin,
   Calendar,
+  CalendarCheck,
   ChevronLeft,
   ChevronRight,
+  Pencil,
+  Send,
 } from 'lucide-react';
+import { useOrdenacao } from '../../hooks/useOrdenacao';
+import { Ordenavel } from '../ui/Tabela';
+
+const hojeISO = () => new Date().toISOString().split('T')[0];
+
+/** Ordem do fluxo: solicitada (esperando) primeiro, depois reprovada, depois aprovada. */
+const PESO_STATUS: Record<StatusVistoria, number> = {
+  SOLICITADA: 0,
+  REPROVADA: 1,
+  APROVADA: 2,
+};
+
+const VALORES_ORDENAVEIS = {
+  cliente: (v: Vistoria) => v.cliente.nome,
+  dataSolicitacao: (v: Vistoria) => v.dataSolicitacao,
+  status: (v: Vistoria) => PESO_STATUS[v.status],
+  dataResultado: (v: Vistoria) => v.dataResultado,
+};
+
+type ColunaVistoria = keyof typeof VALORES_ORDENAVEIS;
 
 export const VistoriaModule: React.FC = () => {
   const {
     vistorias,
     projetos,
+    clientes,
     solicitarVistoria,
     aprovarVistoria,
     reprovarVistoria,
     resolicitarVistoria,
+    registrarInstalacao,
   } = useApp();
 
   const [busca, setBusca] = useState('');
@@ -31,10 +66,28 @@ export const VistoriaModule: React.FC = () => {
   const [pagina, setPagina] = useState(1);
   const itensPorPagina = 6;
 
+  // Abre pela solicitação mais antiga: é a que está esperando retorno há mais tempo.
+  const { ordenacao, ordenar, cabecalho } = useOrdenacao<Vistoria, ColunaVistoria>(
+    VALORES_ORDENAVEIS,
+    { campo: 'dataSolicitacao', direcao: 'asc' },
+  );
+
   // Modals
   const [vistoriaSelecionada, setVistoriaSelecionada] = useState<Vistoria | null>(null);
   const [isModalDetalheAberto, setIsModalDetalheAberto] = useState(false);
   const [isModalNovoAberto, setIsModalNovoAberto] = useState(false);
+
+  // Edição de cliente diretamente por Vistorias
+  const [clienteParaEditar, setClienteParaEditar] = useState<Cliente | null>(null);
+  const [isModalClienteAberto, setIsModalClienteAberto] = useState(false);
+
+  const abrirEdicaoClientePorId = (clienteId: number) => {
+    const c = clientes.find((item) => item.id === clienteId);
+    if (c) {
+      setClienteParaEditar(c);
+      setIsModalClienteAberto(true);
+    }
+  };
 
   /** A vistoria guarda só o `projetoId`; o subtipo vem do projeto correspondente. */
   const projetoPorId = useMemo(() => new Map(projetos.map(p => [p.id, p])), [projetos]);
@@ -44,17 +97,70 @@ export const VistoriaModule: React.FC = () => {
   };
 
   /**
-   * A API recusa vistoria de projeto sem instalação registrada (409), e cada projeto tem no
-   * máximo uma vistoria — a reprovada é resolicitada no próprio registro.
+   * Projetos elegíveis para vistoria: com status APROVADO ou com instalação já registrada,
+   * que ainda não tenham vistoria aberta. Se a instalação ainda não foi registrada,
+   * o modal de vistoria permite informá-la diretamente.
    */
   const projetosElegiveis = useMemo(
     () =>
-      projetos.filter(p => p.dataInstalacao && !vistorias.some(v => v.projetoId === p.id)),
+      projetos.filter(
+        p => (p.status === 'APROVADO' || p.dataInstalacao) && !vistorias.some(v => v.projetoId === p.id),
+      ),
+    [projetos, vistorias],
+  );
+
+  /**
+   * A fila da etapa 4: projeto homologado pela Coelba e ainda sem vistoria. É aqui que o
+   * projeto "chega" depois de aprovado — antes ele não aparecia em lugar nenhum, e a vistoria
+   * só acontecia se alguém lembrasse de vir procurar.
+   *
+   * Nenhum registro de Vistoria nasce junto com a aprovação, de propósito: `data_solicitacao`
+   * tem que ser a data em que se pediu de verdade, senão a métrica de tempo até solicitar
+   * vistoria mede o nada.
+   *
+   * O mais antigo primeiro — é o que está esperando há mais tempo.
+   */
+  const filaAguardandoVistoria = useMemo(
+    () =>
+      projetos
+        .filter(p => p.status === 'APROVADO' && !vistorias.some(v => v.projetoId === p.id))
+        .sort((a, b) => (a.dataAprovacao ?? '').localeCompare(b.dataAprovacao ?? '')),
     [projetos, vistorias],
   );
 
   // Form New Vistoria
   const [novoProjetoId, setNovoProjetoId] = useState<number | ''>('');
+  const [dataInstalacaoNova, setDataInstalacaoNova] = useState(hojeISO);
+
+  // Registro da instalação direto pela fila — é aqui que essa data é preenchida no fluxo,
+  // e não na tela de homologação: quem homologa acompanha a Coelba, não o campo.
+  const [projetoParaInstalacao, setProjetoParaInstalacao] = useState<ProjetoLista | null>(null);
+  const [dataInstalacaoTexto, setDataInstalacaoTexto] = useState(hojeISO);
+  const [salvandoInstalacao, setSalvandoInstalacao] = useState(false);
+
+  const abrirModalInstalacao = (projeto: ProjetoLista) => {
+    setProjetoParaInstalacao(projeto);
+    setDataInstalacaoTexto(projeto.dataInstalacao || hojeISO());
+  };
+
+  const handleConfirmarInstalacao = async () => {
+    if (!projetoParaInstalacao || !dataInstalacaoTexto) return;
+    setSalvandoInstalacao(true);
+    try {
+      await registrarInstalacao(projetoParaInstalacao.id, dataInstalacaoTexto);
+      setProjetoParaInstalacao(null);
+    } catch {
+      /* toast de erro já exibido pelo contexto */
+    } finally {
+      setSalvandoInstalacao(false);
+    }
+  };
+
+  const projetoEscolhido = useMemo(
+    () => projetos.find(p => p.id === novoProjetoId),
+    [projetos, novoProjetoId]
+  );
+
   useEffect(() => {
     setNovoProjetoId(atual =>
       atual === '' && projetosElegiveis.length > 0 ? projetosElegiveis[0].id : atual,
@@ -64,7 +170,7 @@ export const VistoriaModule: React.FC = () => {
   // Filtering
   const vistoriasFiltradas = useMemo(() => {
     const termo = busca.toLowerCase();
-    return vistorias.filter(v => {
+    return ordenar(vistorias.filter(v => {
       const matchTexto =
         v.cliente.nome.toLowerCase().includes(termo) ||
         (v.cliente.cidade ?? '').toLowerCase().includes(termo) ||
@@ -72,8 +178,9 @@ export const VistoriaModule: React.FC = () => {
 
       const matchStatus = filtroStatus === 'TODOS' || v.status === filtroStatus;
       return matchTexto && matchStatus;
-    });
-  }, [vistorias, busca, filtroStatus]);
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vistorias, busca, filtroStatus, ordenacao]);
 
   // Pagination
   const totalPaginas = Math.ceil(vistoriasFiltradas.length / itensPorPagina) || 1;
@@ -84,10 +191,14 @@ export const VistoriaModule: React.FC = () => {
 
   const handleSalvarNovo = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (novoProjetoId === '') return;
+    if (novoProjetoId === '' || !projetoEscolhido) return;
 
     try {
-      await solicitarVistoria(novoProjetoId);
+      if (!projetoEscolhido.dataInstalacao) {
+        if (!dataInstalacaoNova) return;
+        await registrarInstalacao(projetoEscolhido.id, dataInstalacaoNova);
+      }
+      await solicitarVistoria(projetoEscolhido.id);
       setIsModalNovoAberto(false);
     } catch {
       // O AppContext já mostrou o motivo da recusa; o modal fica aberto para correção.
@@ -121,7 +232,7 @@ export const VistoriaModule: React.FC = () => {
               setBusca(e.target.value);
               setPagina(1);
             }}
-            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911] focus:border-[#149911] shadow-xs"
+            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911] focus:border-[#149911] shadow-sm"
           />
         </div>
 
@@ -133,7 +244,7 @@ export const VistoriaModule: React.FC = () => {
               setFiltroStatus(e.target.value);
               setPagina(1);
             }}
-            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-xs"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-sm"
           >
             <option value="TODOS">Todos os Status</option>
             <option value="SOLICITADA">Solicitadas (Aguardando)</option>
@@ -143,13 +254,108 @@ export const VistoriaModule: React.FC = () => {
 
           <button
             onClick={() => setIsModalNovoAberto(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#149911] hover:bg-[#256D1B] text-white text-xs font-medium rounded-xl shadow-xs transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#149911] hover:bg-[#256D1B] text-white text-xs font-medium rounded-xl shadow-sm transition-colors"
           >
             <Plus className="w-4 h-4" />
             <span>Solicitar Vistoria</span>
           </button>
         </div>
       </div>
+
+      {/* Fila de entrada da etapa 4 — projeto homologado esperando vistoria. */}
+      <Card
+        title={`Aguardando vistoria (${filaAguardandoVistoria.length})`}
+        subtitle="Projetos aprovados pela Coelba que ainda não têm vistoria solicitada. Registre a instalação da usina aqui e depois solicite a vistoria."
+      >
+        {filaAguardandoVistoria.length === 0 ? (
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <CheckCircle2 className="w-4 h-4 text-[#149911]" />
+            Nenhum projeto aprovado esperando vistoria.
+          </div>
+        ) : (
+          <div className="overflow-x-auto -mx-6 -my-6">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50/60 text-slate-500 font-medium">
+                  <th className="py-3 px-6">Cliente</th>
+                  <th className="py-3 px-4">Tipo</th>
+                  <th className="py-3 px-4">Aprovado</th>
+                  <th className="py-3 px-4">Instalação da usina</th>
+                  <th className="py-3 px-6 text-right">Ação</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {filaAguardandoVistoria.map(p => {
+                  const diasAprovado = diasDesde(p.dataAprovacao);
+                  return (
+                    <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3.5 px-6">
+                        <div className="font-medium text-slate-800">{p.cliente.nome}</div>
+                        <div className="text-[11px] text-[#424342] flex items-center gap-2 mt-0.5">
+                          <span className="flex items-center gap-1">
+                            <MapPin className="w-3 h-3 text-slate-400" />
+                            {p.cliente.cidade ?? '—'}
+                          </span>
+                          {p.cliente.ucCoelba && (
+                            <span className="text-slate-400">UC: {p.cliente.ucCoelba}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4">{ROTULO_TIPO_PROJETO[p.tipoProjeto]}</td>
+                      <td className="py-3.5 px-4 text-slate-500">
+                        <div className="text-slate-700">{formatarData(p.dataAprovacao)}</div>
+                        {diasAprovado !== null && diasAprovado > 0 && (
+                          <div className="text-[11px] text-slate-400">
+                            {textoDiasParado(diasAprovado)}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {p.dataInstalacao ? (
+                          <button
+                            type="button"
+                            onClick={() => abrirModalInstalacao(p)}
+                            className="inline-flex items-center gap-1 font-medium text-emerald-700 hover:underline"
+                            title="Clique para corrigir a data de instalação"
+                          >
+                            <CalendarCheck className="w-3.5 h-3.5 text-[#149911]" />
+                            {formatarData(p.dataInstalacao)}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => abrirModalInstalacao(p)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 transition-colors"
+                          >
+                            <CalendarCheck className="w-3.5 h-3.5" />
+                            Registrar instalação
+                          </button>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-6 text-right">
+                        <Botao
+                          tamanho="sm"
+                          variante="primario"
+                          disabled={!p.dataInstalacao}
+                          title={
+                            p.dataInstalacao
+                              ? 'Solicitar vistoria à Coelba'
+                              : 'Registre a data de instalação da usina antes de solicitar a vistoria'
+                          }
+                          onClick={() => solicitarVistoria(p.id).catch(() => {})}
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          Solicitar vistoria
+                        </Botao>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       {/* Main Table Card */}
       <Card
@@ -160,11 +366,19 @@ export const VistoriaModule: React.FC = () => {
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50/60 text-slate-500 font-medium">
-                <th className="py-3 px-6">Cliente & Localização</th>
-                <th className="py-3 px-4">Subtipo de Projeto</th>
-                <th className="py-3 px-4">Data Solicitação</th>
-                <th className="py-3 px-4">Status da Vistoria</th>
-                <th className="py-3 px-4">Data Resultado</th>
+                <th className="py-3 px-6">
+                  <Ordenavel {...cabecalho('cliente')}>Cliente &amp; Localização</Ordenavel>
+                </th>
+                <th className="py-3 px-4">Tipo de Projeto</th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('dataSolicitacao')}>Data Solicitação</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('status')}>Status da Vistoria</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('dataResultado')}>Data Resultado</Ordenavel>
+                </th>
                 <th className="py-3 px-6 text-right">Ações</th>
               </tr>
             </thead>
@@ -179,7 +393,17 @@ export const VistoriaModule: React.FC = () => {
                 vistoriasPaginadas.map(v => (
                   <tr key={v.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-3.5 px-6">
-                      <div className="font-medium text-slate-800">{v.cliente.nome}</div>
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="font-medium text-slate-800">{v.cliente.nome}</span>
+                        <button
+                          type="button"
+                          onClick={() => abrirEdicaoClientePorId(v.cliente.id)}
+                          title="Editar dados cadastrais do cliente"
+                          className="p-1 text-slate-400 hover:text-[#149911] hover:bg-slate-100 rounded-lg transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                       <div className="text-[11px] text-[#424342] flex items-center gap-2 mt-0.5">
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-slate-400" />
@@ -196,7 +420,7 @@ export const VistoriaModule: React.FC = () => {
                     <td className="py-3.5 px-4 text-slate-500">
                       <div className="flex items-center gap-1">
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                        <span>{v.dataSolicitacao}</span>
+                        <span>{formatarData(v.dataSolicitacao)}</span>
                       </div>
                     </td>
                     <td className="py-3.5 px-4">
@@ -204,7 +428,9 @@ export const VistoriaModule: React.FC = () => {
                     </td>
                     <td className="py-3.5 px-4 text-slate-500">
                       {v.dataResultado ? (
-                        <span className="font-medium text-slate-700">{v.dataResultado}</span>
+                        <span className="font-medium text-slate-700">
+                          {formatarData(v.dataResultado)}
+                        </span>
                       ) : (
                         <span className="text-slate-400">—</span>
                       )}
@@ -318,7 +544,7 @@ export const VistoriaModule: React.FC = () => {
                       /* toast de erro já exibido pelo contexto */
                     }
                   }}
-                  className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-xs flex items-center gap-1.5"
+                  className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-sm flex items-center gap-1.5"
                 >
                   <RotateCcw className="w-4 h-4" />
                   Solicitar Vistoria Novamente
@@ -335,7 +561,7 @@ export const VistoriaModule: React.FC = () => {
                       /* toast de erro já exibido pelo contexto */
                     }
                   }}
-                  className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs flex items-center gap-1.5"
+                  className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-sm flex items-center gap-1.5"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   Aprovar Vistoria e Liberar Pós-Venda
@@ -346,14 +572,24 @@ export const VistoriaModule: React.FC = () => {
         >
           <div className="space-y-4">
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100 space-y-2 text-xs">
-              <div className="font-medium text-slate-800">Dados da Vistoria Técnica</div>
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-slate-800">Dados da Vistoria Técnica</span>
+                <button
+                  type="button"
+                  onClick={() => abrirEdicaoClientePorId(vistoriaSelecionada.cliente.id)}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-[#149911] hover:bg-emerald-50 rounded-lg transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  Editar Cadastro do Cliente
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2 text-slate-600">
                 <div>Cidade: <strong className="text-slate-800">{vistoriaSelecionada.cliente.cidade ?? '—'}</strong></div>
                 <div>UC Coelba: <strong className="text-slate-800">{vistoriaSelecionada.cliente.ucCoelba || 'N/A'}</strong></div>
-                <div>Subtipo: <strong className="text-slate-800">{subtipoDaVistoria(vistoriaSelecionada)}</strong></div>
-                <div>Instalação em: <strong className="text-slate-800">{vistoriaSelecionada.dataInstalacaoDoProjeto ?? '—'}</strong></div>
-                <div>Solicitado em: <strong className="text-slate-800">{vistoriaSelecionada.dataSolicitacao}</strong></div>
-                <div>Resultado em: <strong className="text-slate-800">{vistoriaSelecionada.dataResultado || 'Pendente'}</strong></div>
+                <div>Tipo: <strong className="text-slate-800">{subtipoDaVistoria(vistoriaSelecionada)}</strong></div>
+                <div>Instalação em: <strong className="text-slate-800">{formatarData(vistoriaSelecionada.dataInstalacaoDoProjeto)}</strong></div>
+                <div>Solicitado em: <strong className="text-slate-800">{formatarData(vistoriaSelecionada.dataSolicitacao)}</strong></div>
+                <div>Resultado em: <strong className="text-slate-800">{vistoriaSelecionada.dataResultado ? formatarData(vistoriaSelecionada.dataResultado) : 'Pendente'}</strong></div>
               </div>
             </div>
 
@@ -388,7 +624,7 @@ export const VistoriaModule: React.FC = () => {
               type="submit"
               form="form-nova-vistoria"
               disabled={projetosElegiveis.length === 0}
-              className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Confirmar Solicitação
             </button>
@@ -398,12 +634,11 @@ export const VistoriaModule: React.FC = () => {
         <form id="form-nova-vistoria" onSubmit={handleSalvarNovo} className="space-y-4 text-xs">
           <div>
             <label className="font-medium text-slate-700 block mb-1">
-              Projeto Instalado Vinculado
+              Projeto Vinculado
             </label>
             {projetosElegiveis.length === 0 ? (
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 leading-relaxed">
-                Nenhum projeto disponível para vistoria. A solicitação só é aceita depois que a
-                instalação da usina é registrada na tela de Projetos.
+                Nenhum projeto aprovado disponível para vistoria no momento.
               </div>
             ) : (
               <select
@@ -413,19 +648,95 @@ export const VistoriaModule: React.FC = () => {
               >
                 {projetosElegiveis.map(p => (
                   <option key={p.id} value={p.id}>
-                    {p.cliente.nome} ({ROTULO_TIPO_PROJETO[p.tipoProjeto]} — Instalado em: {p.dataInstalacao})
+                    {p.cliente.nome} ({ROTULO_TIPO_PROJETO[p.tipoProjeto]} — {p.dataInstalacao ? `instalado em ${formatarData(p.dataInstalacao)}` : 'aprovado, instalação pendente'})
                   </option>
                 ))}
               </select>
             )}
           </div>
 
+          {projetoEscolhido && !projetoEscolhido.dataInstalacao && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-2">
+              <div className="flex items-center gap-1.5 font-medium text-amber-800">
+                <Calendar className="w-4 h-4 text-amber-600" />
+                <span>Preenchimento da Data de Instalação</span>
+              </div>
+              <p>
+                Este projeto foi aprovado na Coelba mas ainda não tem a data de instalação cadastrada.
+                Informe a data em que a usina foi montada para registrar a instalação e solicitar a vistoria:
+              </p>
+              <div>
+                <label className="font-medium text-slate-700 block mb-1">
+                  Data da Instalação da Usina <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={dataInstalacaoNova}
+                  onChange={(e) => setDataInstalacaoNova(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
+                />
+              </div>
+            </div>
+          )}
+
           <div className="text-[11px] text-[#424342] bg-emerald-50 p-2.5 rounded-lg border border-emerald-100">
-            💡 <strong>Regra de Negócio:</strong> Só aparecem aqui projetos com data de instalação
-            registrada e ainda sem vistoria aberta — a Coelba não recebe a solicitação antes disso.
+            💡 <strong>Regra de Negócio:</strong> Se a instalação ainda não havia sido registrada,
+            o sistema salva a data informada e protocola a vistoria automaticamente na Coelba.
           </div>
         </form>
       </Modal>
+
+      {/* Modal: Registrar Instalação — mora aqui, e não na tela de homologação */}
+      <Modal
+        isOpen={projetoParaInstalacao !== null}
+        onClose={() => setProjetoParaInstalacao(null)}
+        title="Registrar instalação da usina"
+        subtitle={`Cliente: ${projetoParaInstalacao?.cliente.nome ?? ''}`}
+        maxWidth="md"
+        footer={
+          <>
+            <Botao variante="fantasma" onClick={() => setProjetoParaInstalacao(null)}>
+              Cancelar
+            </Botao>
+            <Botao
+              variante="primario"
+              onClick={handleConfirmarInstalacao}
+              disabled={salvandoInstalacao || !dataInstalacaoTexto}
+            >
+              {salvandoInstalacao ? 'Salvando…' : 'Registrar instalação'}
+            </Botao>
+          </>
+        }
+      >
+        <div className="space-y-3 text-xs">
+          <p className="text-slate-600">
+            Data em que a usina foi montada em campo — a informação que chega pelo grupo de
+            instalados. É ela que libera a solicitação de vistoria junto à Coelba, e é dela que
+            sai a métrica de tempo entre instalar e pedir a vistoria.
+          </p>
+          <div>
+            <label className="font-medium text-slate-700 block mb-1">
+              Data da instalação <span className="text-rose-600">*</span>
+            </label>
+            <input
+              type="date"
+              value={dataInstalacaoTexto}
+              onChange={(e) => setDataInstalacaoTexto(e.target.value)}
+              max={hojeISO()}
+              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
+              required
+            />
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal: Edição de Cliente */}
+      <ClienteModal
+        isOpen={isModalClienteAberto}
+        onClose={() => setIsModalClienteAberto(false)}
+        clienteEmEdicao={clienteParaEditar}
+      />
     </div>
   );
 };

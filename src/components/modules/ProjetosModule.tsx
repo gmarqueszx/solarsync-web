@@ -2,16 +2,20 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { projetosApi } from '../../api/recursos';
 import {
+  Cliente,
   Projeto,
   ProjetoLista,
   ROTULO_STATUS_PROJETO,
   ROTULO_TIPO_PROJETO,
   StatusProjeto,
   TipoProjeto,
+  TIPOS_PROJETO,
 } from '../../types';
+import { formatarData } from '../../utils/data';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { ClienteModal } from '../common/ClienteModal';
 import {
   Search,
   Plus,
@@ -19,23 +23,46 @@ import {
   XCircle,
   RotateCcw,
   Send,
-  CalendarCheck,
+  Hash,
   MapPin,
   ChevronLeft,
   ChevronRight,
+  Pencil,
 } from 'lucide-react';
+import { useOrdenacao } from '../../hooks/useOrdenacao';
+import { Ordenavel } from '../ui/Tabela';
 
 /** Estados em que a Coelba já recebeu o projeto e pode emitir parecer. */
 const EM_ANALISE: StatusProjeto[] = ['ENCAMINHADO', 'REENCAMINHADO'];
 /** Estados anteriores ao protocolo: ainda dá para encaminhar. */
 const ANTES_DO_ENVIO: StatusProjeto[] = ['RECEBIDO', 'AGUARDANDO_ENVIO'];
 
-const hojeISO = () => new Date().toISOString().split('T')[0];
+/** Ordem do fluxo, não alfabética: ordenar por status tem de andar com o processo. */
+const PESO_STATUS: Record<StatusProjeto, number> = {
+  RECEBIDO: 0,
+  AGUARDANDO_ENVIO: 1,
+  ENCAMINHADO: 2,
+  REPROVADO: 3,
+  REENCAMINHADO: 4,
+  APROVADO: 5,
+};
+
+const VALORES_ORDENAVEIS = {
+  cliente: (p: ProjetoLista) => p.cliente.nome,
+  tipo: (p: ProjetoLista) => ROTULO_TIPO_PROJETO[p.tipoProjeto],
+  numeroSolicitacao: (p: ProjetoLista) => p.numeroSolicitacao,
+  analista: (p: ProjetoLista) => p.analistaResponsavel?.nome ?? null,
+  cronograma: (p: ProjetoLista) => p.dataRecebimento,
+  status: (p: ProjetoLista) => PESO_STATUS[p.status],
+};
+
+type ColunaProjeto = keyof typeof VALORES_ORDENAVEIS;
 
 export const ProjetosModule: React.FC = () => {
   const {
     projetos,
     clientes,
+    debitos,
     usuarios,
     criarProjeto,
     aguardarEnvioProjeto,
@@ -43,8 +70,24 @@ export const ProjetosModule: React.FC = () => {
     reencaminharProjeto,
     aprovarProjeto,
     reprovarProjeto,
-    registrarInstalacao,
   } = useApp();
+
+  /**
+   * Por que o envio à Coelba será recusado, se for o caso. Espelha as duas guardas do
+   * `ProjetoService`: `SEM_CONSULTA` pede a consulta do débito de homologação (o passo do
+   * projetista ao receber o cliente), `DEBITO_ATIVO` pede a cobrança. Antecipar aqui evita a
+   * analista descobrir o motivo só depois de clicar em enviar.
+   */
+  const bloqueioDoEnvio = useMemo(() => {
+    const statusPorCliente = new Map(
+      debitos.filter(d => d.tipo === 'HOMOLOGACAO').map(d => [d.cliente.id, d.status]),
+    );
+    return (clienteId: number): 'SEM_CONSULTA' | 'DEBITO_ATIVO' | null => {
+      const status = statusPorCliente.get(clienteId);
+      if (status === undefined) return 'SEM_CONSULTA';
+      return status === 'ATIVO' ? 'DEBITO_ATIVO' : null;
+    };
+  }, [debitos]);
 
   const [busca, setBusca] = useState('');
   const [filtroStatus, setFiltroStatus] = useState<string>('TODOS');
@@ -53,6 +96,12 @@ export const ProjetosModule: React.FC = () => {
   const [pagina, setPagina] = useState(1);
   const itensPorPagina = 6;
 
+  // Abre pelo mais antigo em recebimento: é o projeto parado que atrasa o cliente.
+  const { ordenacao, ordenar, cabecalho } = useOrdenacao<ProjetoLista, ColunaProjeto>(
+    VALORES_ORDENAVEIS,
+    { campo: 'cronograma', direcao: 'asc' },
+  );
+
   // Modals
   const [projetoSelecionado, setProjetoSelecionado] = useState<ProjetoLista | null>(null);
   const [isModalDetalheAberto, setIsModalDetalheAberto] = useState(false);
@@ -60,9 +109,26 @@ export const ProjetosModule: React.FC = () => {
   const [isModalReprovaAberto, setIsModalReprovaAberto] = useState(false);
   const [motivoReprovaTexto, setMotivoReprovaTexto] = useState('');
   const [isModalEncaminharAberto, setIsModalEncaminharAberto] = useState(false);
+  const [modoEnvio, setModoEnvio] = useState<'ENCAMINHAR' | 'REENCAMINHAR'>('ENCAMINHAR');
   const [dataArtEnvio, setDataArtEnvio] = useState('');
-  const [isModalInstalacaoAberto, setIsModalInstalacaoAberto] = useState(false);
-  const [dataInstalacaoTexto, setDataInstalacaoTexto] = useState(hojeISO());
+  const [numeroSolicitacaoEnvio, setNumeroSolicitacaoEnvio] = useState('');
+
+  // Edição e cadastro de cliente diretamente pelo módulo de projetos
+  const [clienteParaEditar, setClienteParaEditar] = useState<Cliente | null>(null);
+  const [isModalClienteAberto, setIsModalClienteAberto] = useState(false);
+
+  const abrirCriacaoCliente = () => {
+    setClienteParaEditar(null);
+    setIsModalClienteAberto(true);
+  };
+
+  const abrirEdicaoClientePorId = (clienteId: number) => {
+    const c = clientes.find((item) => item.id === clienteId);
+    if (c) {
+      setClienteParaEditar(c);
+      setIsModalClienteAberto(true);
+    }
+  };
 
   /**
    * A listagem é enxuta (não traz data da ART nem motivo da reprova). O detalhe completo é
@@ -90,7 +156,7 @@ export const ProjetosModule: React.FC = () => {
 
   // Form for New Project
   const [novoClienteId, setNovoClienteId] = useState<number | ''>('');
-  const [novoTipoProjeto, setNovoTipoProjeto] = useState<TipoProjeto>('PADRAO');
+  const [novoTipoProjeto, setNovoTipoProjeto] = useState<TipoProjeto>('PROJETO_INICIAL');
   const [novoAnalistaId, setNovoAnalistaId] = useState<number | ''>('');
   const [novaPotencia, setNovaPotencia] = useState('15.0');
 
@@ -102,12 +168,14 @@ export const ProjetosModule: React.FC = () => {
   // Filtering
   const projetosFiltrados = useMemo(() => {
     const termo = busca.toLowerCase();
-    return projetos.filter(p => {
+    return ordenar(projetos.filter(p => {
       const matchTexto =
         p.cliente.nome.toLowerCase().includes(termo) ||
         (p.cliente.cidade ?? '').toLowerCase().includes(termo) ||
         (p.analistaResponsavel?.nome ?? '').toLowerCase().includes(termo) ||
-        (p.cliente.ucCoelba != null && p.cliente.ucCoelba.includes(busca));
+        (p.cliente.ucCoelba ?? '').toLowerCase().includes(termo) ||
+        // Quando o retorno da Coelba chega, o analista tem o número em mãos, não o nome.
+        (p.numeroSolicitacao ?? '').toLowerCase().includes(termo);
 
       const matchStatus = filtroStatus === 'TODOS' || p.status === filtroStatus;
       const matchTipo = filtroTipo === 'TODOS' || p.tipoProjeto === filtroTipo;
@@ -115,8 +183,9 @@ export const ProjetosModule: React.FC = () => {
         filtroAnalista === 'TODOS' || String(p.analistaResponsavel?.id ?? '') === filtroAnalista;
 
       return matchTexto && matchStatus && matchTipo && matchAnalista;
-    });
-  }, [projetos, busca, filtroStatus, filtroTipo, filtroAnalista]);
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projetos, busca, filtroStatus, filtroTipo, filtroAnalista, ordenacao]);
 
   // Pagination
   const totalPaginas = Math.ceil(projetosFiltrados.length / itensPorPagina) || 1;
@@ -162,26 +231,34 @@ export const ProjetosModule: React.FC = () => {
     }
   };
 
+  /** Abre o modal de envio, seja o primeiro (`ENCAMINHAR`) ou o reenvio após reprova. */
+  const abrirModalEnvio = (
+    projeto: ProjetoLista,
+    modo: 'ENCAMINHAR' | 'REENCAMINHAR',
+  ) => {
+    setProjetoSelecionado(projeto);
+    setModoEnvio(modo);
+    setDataArtEnvio('');
+    // No reenvio, parte do número atual: a Coelba costuma manter, mas às vezes emite outro.
+    setNumeroSolicitacaoEnvio(modo === 'REENCAMINHAR' ? projeto.numeroSolicitacao ?? '' : '');
+    setIsModalEncaminharAberto(true);
+  };
+
   const handleConfirmarEncaminhamento = async () => {
     if (!projetoSelecionado) return;
+    const numero = numeroSolicitacaoEnvio.trim() || null;
     try {
-      await encaminharProjeto(projetoSelecionado.id, dataArtEnvio || null);
+      if (modoEnvio === 'REENCAMINHAR') {
+        await reencaminharProjeto(projetoSelecionado.id, numero);
+      } else {
+        await encaminharProjeto(projetoSelecionado.id, dataArtEnvio || null, numero);
+      }
       setIsModalEncaminharAberto(false);
       setIsModalDetalheAberto(false);
       setDataArtEnvio('');
+      setNumeroSolicitacaoEnvio('');
     } catch {
-      /* débito ativo do cliente cai aqui: o toast do contexto explica */
-    }
-  };
-
-  const handleConfirmarInstalacao = async () => {
-    if (!projetoSelecionado || !dataInstalacaoTexto) return;
-    try {
-      await registrarInstalacao(projetoSelecionado.id, dataInstalacaoTexto);
-      setIsModalInstalacaoAberto(false);
-      setIsModalDetalheAberto(false);
-    } catch {
-      /* toast de erro já exibido pelo contexto */
+      /* débito ativo ou não consultado caem aqui: o toast do contexto explica qual foi */
     }
   };
 
@@ -223,7 +300,7 @@ export const ProjetosModule: React.FC = () => {
               setBusca(e.target.value);
               setPagina(1);
             }}
-            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911] focus:border-[#149911] shadow-xs"
+            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911] focus:border-[#149911] shadow-sm"
           />
         </div>
 
@@ -236,7 +313,7 @@ export const ProjetosModule: React.FC = () => {
               setFiltroStatus(e.target.value);
               setPagina(1);
             }}
-            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-xs"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-sm"
           >
             <option value="TODOS">Todos Status</option>
             {(Object.keys(ROTULO_STATUS_PROJETO) as StatusProjeto[]).map(status => (
@@ -246,17 +323,17 @@ export const ProjetosModule: React.FC = () => {
             ))}
           </select>
 
-          {/* Project Type Filter */}
+          {/* Tipo de projeto: são só três na operação real. */}
           <select
             value={filtroTipo}
             onChange={(e) => {
               setFiltroTipo(e.target.value);
               setPagina(1);
             }}
-            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-xs"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-sm"
           >
-            <option value="TODOS">Todos os Subtipos</option>
-            {(Object.keys(ROTULO_TIPO_PROJETO) as TipoProjeto[]).map(tipo => (
+            <option value="TODOS">Todos os Tipos</option>
+            {TIPOS_PROJETO.map(tipo => (
               <option key={tipo} value={tipo}>
                 {ROTULO_TIPO_PROJETO[tipo]}
               </option>
@@ -270,7 +347,7 @@ export const ProjetosModule: React.FC = () => {
               setFiltroAnalista(e.target.value);
               setPagina(1);
             }}
-            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-xs"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-sm"
           >
             <option value="TODOS">Todos Analistas</option>
             {analistasUnicos.map(a => (
@@ -280,10 +357,19 @@ export const ProjetosModule: React.FC = () => {
             ))}
           </select>
 
+          {/* New Client CTA */}
+          <button
+            onClick={abrirCriacaoCliente}
+            className="inline-flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-medium rounded-xl shadow-sm transition-colors"
+          >
+            <Plus className="w-4 h-4 text-[#149911]" />
+            <span>Novo Cliente</span>
+          </button>
+
           {/* New Project CTA */}
           <button
             onClick={() => setIsModalNovoAberto(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#149911] hover:bg-[#256D1B] text-white text-xs font-medium rounded-xl shadow-xs transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#149911] hover:bg-[#256D1B] text-white text-xs font-medium rounded-xl shadow-sm transition-colors"
           >
             <Plus className="w-4 h-4" />
             <span>Novo Projeto</span>
@@ -293,25 +379,38 @@ export const ProjetosModule: React.FC = () => {
 
       {/* Main Table Card */}
       <Card
-        title="Projetos em Homologação Coelba"
-        subtitle={`Exibe ${projetosFiltrados.length} projetos (unificação das abas Ivan, Larissa, Camila e dos 5 subtipos)`}
+        title="Projetos em Homologação"
+        subtitle={`${projetosFiltrados.length} projetos no recorte atual`}
       >
         <div className="overflow-x-auto -mx-6 -my-6">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50/60 text-slate-500 font-medium">
-                <th className="py-3 px-6">Cliente & Localização</th>
-                <th className="py-3 px-4">Subtipo & Potência</th>
-                <th className="py-3 px-4">Analista Responsável</th>
-                <th className="py-3 px-4">Cronograma (Receb. / Envio / Instalação)</th>
-                <th className="py-3 px-4">Status Parecer</th>
+                <th className="py-3 px-6">
+                  <Ordenavel {...cabecalho('cliente')}>Cliente &amp; Localização</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('tipo')}>Tipo &amp; Potência</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('numeroSolicitacao')}>Nº Solicitação</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('analista')}>Analista Responsável</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('cronograma')}>Cronograma (Receb. / Envio)</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('status')}>Status Parecer</Ordenavel>
+                </th>
                 <th className="py-3 px-6 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {projetosPaginados.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400">
+                  <td colSpan={7} className="py-8 text-center text-slate-400">
                     Nenhum projeto encontrado com os filtros selecionados.
                   </td>
                 </tr>
@@ -319,7 +418,17 @@ export const ProjetosModule: React.FC = () => {
                 projetosPaginados.map(proj => (
                   <tr key={proj.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-3.5 px-6">
-                      <div className="font-medium text-slate-800">{proj.cliente.nome}</div>
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="font-medium text-slate-800">{proj.cliente.nome}</span>
+                        <button
+                          type="button"
+                          onClick={() => abrirEdicaoClientePorId(proj.cliente.id)}
+                          title="Editar dados cadastrais do cliente"
+                          className="p-1 text-slate-400 hover:text-[#149911] hover:bg-slate-100 rounded-lg transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                       <div className="text-[11px] text-[#424342] flex items-center gap-2 mt-0.5">
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-slate-400" />
@@ -337,6 +446,16 @@ export const ProjetosModule: React.FC = () => {
                       </div>
                     </td>
                     <td className="py-3.5 px-4">
+                      {proj.numeroSolicitacao ? (
+                        <span className="inline-flex items-center gap-1 font-medium text-slate-800 tabular-nums">
+                          <Hash className="w-3 h-3 text-slate-400" />
+                          {proj.numeroSolicitacao}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-3.5 px-4">
                       <div className="flex items-center gap-1.5">
                         <div className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px] font-medium border border-slate-200">
                           {(proj.analistaResponsavel?.nome ?? '—').charAt(0)}
@@ -345,30 +464,51 @@ export const ProjetosModule: React.FC = () => {
                       </div>
                     </td>
                     <td className="py-3.5 px-4 text-slate-500">
-                      <div className="text-[11px] space-y-0.5">
-                        <div>Recebimento: <span className="text-slate-700">{proj.dataRecebimento ?? '—'}</span></div>
-                        <div>Envio Coelba: <span className="text-slate-700">{proj.dataEncaminhado || 'Aguardando'}</span></div>
-                        <div>Instalação: <span className="text-slate-700">{proj.dataInstalacao || 'Não registrada'}</span></div>
+                      <div className="text-[11px] space-y-1">
+                        <div>Recebimento: <span className="text-slate-700">{formatarData(proj.dataRecebimento)}</span></div>
+                        <div>
+                          Envio Coelba:{' '}
+                          <span className="text-slate-700">
+                            {proj.dataEncaminhado ? formatarData(proj.dataEncaminhado) : 'Aguardando'}
+                          </span>
+                        </div>
                       </div>
                     </td>
                     <td className="py-3.5 px-4">
                       {getStatusBadge(proj.status)}
                       {proj.status === 'APROVADO' && proj.dataAprovacao && (
                         <div className="text-[10px] text-emerald-700 mt-1">
-                          Aprovado em: {proj.dataAprovacao}
+                          Aprovado em {formatarData(proj.dataAprovacao)}
                         </div>
                       )}
+                      {/* A instalação é registrada na etapa de Vistoria, não aqui. */}
+                      {proj.status === 'APROVADO' && !proj.dataInstalacao && (
+                        <div className="text-[10px] text-amber-700 mt-1">
+                          Na fila da vistoria
+                        </div>
+                      )}
+                      {/* O que vai barrar o envio, antes de o analista tentar. */}
+                      {[...ANTES_DO_ENVIO, 'REPROVADO'].includes(proj.status)
+                        && bloqueioDoEnvio(proj.cliente.id) !== null && (
+                          <div className="mt-1">
+                            {bloqueioDoEnvio(proj.cliente.id) === 'SEM_CONSULTA' ? (
+                              <span className="text-[10px] text-sky-700">
+                                Falta consultar o débito de homologação
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-rose-700">
+                                Travado por débito de homologação
+                              </span>
+                            )}
+                          </div>
+                        )}
                     </td>
                     <td className="py-3.5 px-6 text-right">
                       {/* Só as transições que a máquina de estados do backend aceita. */}
                       <div className="flex items-center justify-end gap-1">
                         {ANTES_DO_ENVIO.includes(proj.status) && (
                           <button
-                            onClick={() => {
-                              setProjetoSelecionado(proj);
-                              setDataArtEnvio('');
-                              setIsModalEncaminharAberto(true);
-                            }}
+                            onClick={() => abrirModalEnvio(proj, 'ENCAMINHAR')}
                             title="Encaminhar Projeto à Coelba"
                             className="p-1.5 text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
                           >
@@ -398,24 +538,11 @@ export const ProjetosModule: React.FC = () => {
                         )}
                         {proj.status === 'REPROVADO' && (
                           <button
-                            onClick={() => reencaminharProjeto(proj.id).catch(() => {})}
+                            onClick={() => abrirModalEnvio(proj, 'REENCAMINHAR')}
                             title="Reencaminhar com Correções"
                             className="p-1.5 text-sky-600 hover:bg-sky-50 rounded-lg transition-colors"
                           >
                             <RotateCcw className="w-4 h-4" />
-                          </button>
-                        )}
-                        {proj.status === 'APROVADO' && !proj.dataInstalacao && (
-                          <button
-                            onClick={() => {
-                              setProjetoSelecionado(proj);
-                              setDataInstalacaoTexto(hojeISO());
-                              setIsModalInstalacaoAberto(true);
-                            }}
-                            title="Registrar Instalação (libera a vistoria)"
-                            className="p-1.5 text-[#149911] hover:bg-emerald-50 rounded-lg transition-colors"
-                          >
-                            <CalendarCheck className="w-4 h-4" />
                           </button>
                         )}
                         <button
@@ -502,11 +629,8 @@ export const ProjetosModule: React.FC = () => {
               {ANTES_DO_ENVIO.includes(projetoSelecionado.status) && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setDataArtEnvio('');
-                    setIsModalEncaminharAberto(true);
-                  }}
-                  className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-xs flex items-center gap-1.5"
+                  onClick={() => abrirModalEnvio(projetoSelecionado, 'ENCAMINHAR')}
+                  className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-sm flex items-center gap-1.5"
                 >
                   <Send className="w-4 h-4" />
                   Encaminhar à Coelba
@@ -515,15 +639,8 @@ export const ProjetosModule: React.FC = () => {
               {projetoSelecionado.status === 'REPROVADO' && (
                 <button
                   type="button"
-                  onClick={async () => {
-                    try {
-                      await reencaminharProjeto(projetoSelecionado.id);
-                      setIsModalDetalheAberto(false);
-                    } catch {
-                      /* toast de erro já exibido pelo contexto */
-                    }
-                  }}
-                  className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-xs flex items-center gap-1.5"
+                  onClick={() => abrirModalEnvio(projetoSelecionado, 'REENCAMINHAR')}
+                  className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-sm flex items-center gap-1.5"
                 >
                   <RotateCcw className="w-4 h-4" />
                   Reencaminhar com Correções
@@ -540,23 +657,10 @@ export const ProjetosModule: React.FC = () => {
                       /* toast de erro já exibido pelo contexto */
                     }
                   }}
-                  className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs flex items-center gap-1.5"
+                  className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-sm flex items-center gap-1.5"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   Aprovar Projeto
-                </button>
-              )}
-              {projetoSelecionado.status === 'APROVADO' && !projetoSelecionado.dataInstalacao && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDataInstalacaoTexto(hojeISO());
-                    setIsModalInstalacaoAberto(true);
-                  }}
-                  className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs flex items-center gap-1.5"
-                >
-                  <CalendarCheck className="w-4 h-4" />
-                  Registrar Instalação
                 </button>
               )}
             </>
@@ -565,18 +669,29 @@ export const ProjetosModule: React.FC = () => {
           <div className="space-y-4">
             {/* Summary Box */}
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100 space-y-2 text-xs">
-              <div className="font-medium text-slate-800">Dados do Projeto & Cliente</div>
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-slate-800">Dados do Projeto & Cliente</span>
+                <button
+                  type="button"
+                  onClick={() => abrirEdicaoClientePorId(projetoSelecionado.cliente.id)}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-[#149911] hover:bg-emerald-50 rounded-lg transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  Editar Cadastro do Cliente
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2 text-slate-600">
                 <div>Cidade: <strong className="text-slate-800">{projetoSelecionado.cliente.cidade ?? '—'}</strong></div>
                 <div>Vendedor: <strong className="text-slate-800">{projetoSelecionado.cliente.vendedor ?? '—'}</strong></div>
                 <div>UC Coelba: <strong className="text-slate-800">{projetoSelecionado.cliente.ucCoelba || 'N/A'}</strong></div>
                 <div>Analista: <strong className="text-slate-800">{projetoSelecionado.analistaResponsavel?.nome ?? '—'}</strong></div>
                 <div>Potência: <strong className="text-slate-800">{formatPotencia(projetoSelecionado.potenciaKwp)}</strong></div>
-                <div>Data Recebimento: <strong className="text-slate-800">{projetoSelecionado.dataRecebimento ?? '—'}</strong></div>
-                <div>Data ART: <strong className="text-slate-800">{detalhe?.dataArt || 'Pendente'}</strong></div>
-                <div>Data Envio Coelba: <strong className="text-slate-800">{projetoSelecionado.dataEncaminhado || 'Aguardando'}</strong></div>
-                <div>Data Aprovação: <strong className="text-slate-800">{projetoSelecionado.dataAprovacao || '—'}</strong></div>
-                <div>Data Instalação: <strong className="text-slate-800">{projetoSelecionado.dataInstalacao || 'Não registrada'}</strong></div>
+                <div>Nº Solicitação: <strong className="text-slate-800">{projetoSelecionado.numeroSolicitacao || 'Ainda não emitido'}</strong></div>
+                <div>Data Recebimento: <strong className="text-slate-800">{formatarData(projetoSelecionado.dataRecebimento)}</strong></div>
+                <div>Data ART: <strong className="text-slate-800">{detalhe?.dataArt ? formatarData(detalhe.dataArt) : 'Pendente'}</strong></div>
+                <div>Data Envio Coelba: <strong className="text-slate-800">{projetoSelecionado.dataEncaminhado ? formatarData(projetoSelecionado.dataEncaminhado) : 'Aguardando'}</strong></div>
+                <div>Data Aprovação: <strong className="text-slate-800">{formatarData(projetoSelecionado.dataAprovacao)}</strong></div>
+                <div>Data Instalação: <strong className="text-slate-800">{projetoSelecionado.dataInstalacao ? formatarData(projetoSelecionado.dataInstalacao) : 'Registrada na etapa de vistoria'}</strong></div>
               </div>
             </div>
 
@@ -596,7 +711,9 @@ export const ProjetosModule: React.FC = () => {
             )}
 
             <div className="text-[11px] text-[#424342] bg-emerald-50 p-2.5 rounded-lg border border-emerald-100">
-              💡 <strong>Regra de Negócio:</strong> Quando o projeto é <em>APROVADO</em>, ele fica automaticamente elegível para solicitação de vistoria técnica pós-instalação da usina fotovoltaica.
+              💡 <strong>Depois daqui:</strong> aprovado, o projeto entra na fila{' '}
+              <em>Aguardando vistoria</em> do módulo de Vistoria. É lá que se registra a data de
+              instalação da usina e se solicita a vistoria — quem homologa não preenche instalação.
             </div>
           </div>
         </Modal>
@@ -620,7 +737,7 @@ export const ProjetosModule: React.FC = () => {
             <button
               type="button"
               onClick={handleConfirmarReprova}
-              className="px-4 py-2 text-xs font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-colors shadow-xs"
+              className="px-4 py-2 text-xs font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-colors shadow-sm"
             >
               Confirmar Reprova
             </button>
@@ -642,11 +759,15 @@ export const ProjetosModule: React.FC = () => {
         </div>
       </Modal>
 
-      {/* Modal: Encaminhar à Coelba */}
+      {/* Modal: Encaminhar / Reencaminhar à Coelba */}
       <Modal
         isOpen={isModalEncaminharAberto}
         onClose={() => setIsModalEncaminharAberto(false)}
-        title="Encaminhar Projeto à Coelba"
+        title={
+          modoEnvio === 'REENCAMINHAR'
+            ? 'Reencaminhar Projeto Corrigido'
+            : 'Encaminhar Projeto à Coelba'
+        }
         subtitle={`Cliente: ${projetoSelecionado?.cliente.nome ?? ''}`}
         footer={
           <>
@@ -660,7 +781,7 @@ export const ProjetosModule: React.FC = () => {
             <button
               type="button"
               onClick={handleConfirmarEncaminhamento}
-              className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-xs"
+              className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-sm"
             >
               Confirmar Envio
             </button>
@@ -669,61 +790,42 @@ export const ProjetosModule: React.FC = () => {
       >
         <div className="space-y-3 text-xs">
           <p className="text-slate-600">
-            O protocolo só é aceito com o cliente sem débito em aberto na Coelba. Informe a data de emissão da ART, se já houver.
+            O envio exige a <strong>consulta de débito de homologação</strong> registrada e sem
+            débito em aberto — é o passo que o projetista faz ao receber o cliente.
           </p>
+
           <div>
             <label className="font-medium text-slate-700 block mb-1">
-              Data Emissão ART (Opcional)
+              Nº da Solicitação na Coelba
             </label>
             <input
-              type="date"
-              value={dataArtEnvio}
-              onChange={(e) => setDataArtEnvio(e.target.value)}
+              type="text"
+              maxLength={50}
+              value={numeroSolicitacaoEnvio}
+              onChange={(e) => setNumeroSolicitacaoEnvio(e.target.value)}
+              placeholder="Ex: 2026-COE-004781"
               className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
             />
+            <p className="text-[11px] text-[#424342] mt-1">
+              É o número que a Coelba devolve ao receber o projeto. Guardá-lo aqui é o que vai
+              permitir casar o e-mail diário de status com este registro.
+              {modoEnvio === 'REENCAMINHAR' && ' Em branco, mantém o número atual.'}
+            </p>
           </div>
-        </div>
-      </Modal>
 
-      {/* Modal: Registrar Instalação */}
-      <Modal
-        isOpen={isModalInstalacaoAberto}
-        onClose={() => setIsModalInstalacaoAberto(false)}
-        title="Registrar Instalação da Usina"
-        subtitle={`Cliente: ${projetoSelecionado?.cliente.nome ?? ''}`}
-        footer={
-          <>
-            <button
-              type="button"
-              onClick={() => setIsModalInstalacaoAberto(false)}
-              className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
-            >
-              Cancelar
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirmarInstalacao}
-              className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs"
-            >
-              Registrar Instalação
-            </button>
-          </>
-        }
-      >
-        <div className="space-y-3 text-xs">
-          <p className="text-slate-600">
-            A data de instalação é o que libera a solicitação de vistoria técnica junto à Coelba.
-          </p>
-          <div>
-            <label className="font-medium text-slate-700 block mb-1">Data da Instalação</label>
-            <input
-              type="date"
-              value={dataInstalacaoTexto}
-              onChange={(e) => setDataInstalacaoTexto(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
-              required
-            />
-          </div>
+          {modoEnvio === 'ENCAMINHAR' && (
+            <div>
+              <label className="font-medium text-slate-700 block mb-1">
+                Data Emissão ART (Opcional)
+              </label>
+              <input
+                type="date"
+                value={dataArtEnvio}
+                onChange={(e) => setDataArtEnvio(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
+              />
+            </div>
+          )}
         </div>
       </Modal>
 
@@ -732,7 +834,7 @@ export const ProjetosModule: React.FC = () => {
         isOpen={isModalNovoAberto}
         onClose={() => setIsModalNovoAberto(false)}
         title="Cadastrar Novo Projeto de Homologação"
-        subtitle="Unifica o registro do projeto eliminando abas duplicadas"
+        subtitle="O projeto do cliente, do recebimento ao envio à concessionária"
         footer={
           <>
             <button
@@ -745,7 +847,7 @@ export const ProjetosModule: React.FC = () => {
             <button
               type="submit"
               form="form-novo-projeto"
-              className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs"
+              className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-sm"
             >
               Cadastrar Projeto
             </button>
@@ -754,9 +856,19 @@ export const ProjetosModule: React.FC = () => {
       >
         <form id="form-novo-projeto" onSubmit={handleSalvarNovo} className="space-y-4 text-xs">
           <div>
-            <label className="font-medium text-slate-700 block mb-1">
-              Cliente Vinculado
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="font-medium text-slate-700">
+                Cliente Vinculado
+              </label>
+              <button
+                type="button"
+                onClick={abrirCriacaoCliente}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-[#149911] hover:underline"
+              >
+                <Plus className="w-3 h-3" />
+                Cadastrar novo cliente
+              </button>
+            </div>
             <select
               value={novoClienteId}
               onChange={(e) => setNovoClienteId(e.target.value === '' ? '' : Number(e.target.value))}
@@ -773,14 +885,14 @@ export const ProjetosModule: React.FC = () => {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="font-medium text-slate-700 block mb-1">
-                Subtipo de Projeto
+                Tipo de Projeto
               </label>
               <select
                 value={novoTipoProjeto}
                 onChange={(e) => setNovoTipoProjeto(e.target.value as TipoProjeto)}
                 className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
               >
-                {(Object.keys(ROTULO_TIPO_PROJETO) as TipoProjeto[]).map(tipo => (
+                {TIPOS_PROJETO.map(tipo => (
                   <option key={tipo} value={tipo}>
                     {ROTULO_TIPO_PROJETO[tipo]}
                   </option>
@@ -824,6 +936,13 @@ export const ProjetosModule: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* Modal: Cadastro e Edição de Cliente */}
+      <ClienteModal
+        isOpen={isModalClienteAberto}
+        onClose={() => setIsModalClienteAberto(false)}
+        clienteEmEdicao={clienteParaEditar}
+      />
     </div>
   );
 };

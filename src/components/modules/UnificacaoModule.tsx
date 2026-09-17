@@ -1,9 +1,16 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { ROTULO_STATUS_DESLIGAMENTO, Unificacao } from '../../types';
+import {
+  Cliente,
+  ROTULO_STATUS_DESLIGAMENTO,
+  StatusDesligamento,
+  Unificacao,
+} from '../../types';
+import { formatarData } from '../../utils/data';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { ClienteModal } from '../common/ClienteModal';
 import {
   Search,
   Plus,
@@ -13,7 +20,28 @@ import {
   ChevronLeft,
   ChevronRight,
   GitMerge,
+  Pencil,
 } from 'lucide-react';
+import { useOrdenacao } from '../../hooks/useOrdenacao';
+import { Ordenavel } from '../ui/Tabela';
+
+/** Ordem do ciclo do desligamento, não alfabética. */
+const PESO_DESLIGAMENTO: Record<StatusDesligamento, number> = {
+  NAO_SOLICITADO: 0,
+  SOLICITADO: 1,
+  OS_ABERTA: 2,
+  CONCLUIDO: 3,
+};
+
+const VALORES_ORDENAVEIS = {
+  cliente: (u: Unificacao) => u.cliente.nome,
+  projetista: (u: Unificacao) => u.projetista?.nome ?? null,
+  informacoes: (u: Unificacao) => u.informacoes,
+  feita: (u: Unificacao) => u.feita,
+  desligamento: (u: Unificacao) => PESO_DESLIGAMENTO[u.desligamentoStatus],
+};
+
+type ColunaUnificacao = keyof typeof VALORES_ORDENAVEIS;
 
 export const UnificacaoModule: React.FC = () => {
   const {
@@ -27,6 +55,18 @@ export const UnificacaoModule: React.FC = () => {
     abrirOrdemDeServico,
     concluirDesligamento,
   } = useApp();
+
+  // Edição de dados do cliente diretamente pelo módulo de unificação
+  const [clienteParaEditar, setClienteParaEditar] = useState<Cliente | null>(null);
+  const [isModalClienteAberto, setIsModalClienteAberto] = useState(false);
+
+  const abrirEdicaoClientePorId = (clienteId: number) => {
+    const c = clientes.find((item) => item.id === clienteId);
+    if (c) {
+      setClienteParaEditar(c);
+      setIsModalClienteAberto(true);
+    }
+  };
 
   /** A linha traz só o resumo do cliente; vendedor vem do cadastro completo. */
   const vendedorDoCliente = useMemo(() => {
@@ -42,6 +82,12 @@ export const UnificacaoModule: React.FC = () => {
   const [filtroDesligamento, setFiltroDesligamento] = useState<string>('TODOS');
   const [pagina, setPagina] = useState(1);
   const itensPorPagina = 6;
+
+  // Abre pelo que falta fazer: unificação pendente primeiro, desligamento por pedir em seguida.
+  const { ordenacao, ordenar, cabecalho } = useOrdenacao<Unificacao, ColunaUnificacao>(
+    VALORES_ORDENAVEIS,
+    { campo: 'feita', direcao: 'asc' },
+  );
 
   // Modals
   const [unificacaoSelecionada, setUnificacaoSelecionada] = useState<Unificacao | null>(null);
@@ -61,7 +107,7 @@ export const UnificacaoModule: React.FC = () => {
   // Filtering
   const unificacoesFiltradas = useMemo(() => {
     const termo = busca.toLowerCase();
-    return unificacoes.filter(u => {
+    return ordenar(unificacoes.filter(u => {
       const matchTexto =
         u.cliente.nome.toLowerCase().includes(termo) ||
         (u.cidade ?? '').toLowerCase().includes(termo) ||
@@ -77,8 +123,9 @@ export const UnificacaoModule: React.FC = () => {
         filtroDesligamento === 'TODOS' || u.desligamentoStatus === filtroDesligamento;
 
       return matchTexto && matchFeita && matchDesligamento;
-    });
-  }, [unificacoes, busca, filtroFeita, filtroDesligamento]);
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unificacoes, busca, filtroFeita, filtroDesligamento, ordenacao]);
 
   // Pagination
   const totalPaginas = Math.ceil(unificacoesFiltradas.length / itensPorPagina) || 1;
@@ -108,7 +155,7 @@ export const UnificacaoModule: React.FC = () => {
     <div className="space-y-5">
       {/* Overview Stat Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-xs text-[#424342]">Unificações Concluídas</span>
             <div className="text-xl font-semibold text-emerald-700 mt-1">
@@ -120,7 +167,7 @@ export const UnificacaoModule: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
             {/*
               Mostra quem está ESPERANDO, não quem já concluiu: a fila de espera é a que se
@@ -142,11 +189,12 @@ export const UnificacaoModule: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-xs text-[#424342]">Consolidação</span>
-            <div className="text-xs text-slate-700 mt-1 font-medium">
-              Unifica as antigas abas <strong>IGOR</strong>, <strong>UNIFICAÇÕES</strong> e <strong>DESLIGAMENTOS</strong>
+            {/* A outra ponta da fila: cliente com unificação registrada e ainda por fazer. */}
+            <span className="text-xs text-[#424342]">Falta Unificar</span>
+            <div className="text-xl font-semibold text-slate-700 mt-1">
+              {unificacoes.filter(u => !u.feita).length} clientes
             </div>
           </div>
           <div className="w-9 h-9 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center">
@@ -168,7 +216,7 @@ export const UnificacaoModule: React.FC = () => {
               setBusca(e.target.value);
               setPagina(1);
             }}
-            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911] focus:border-[#149911] shadow-xs"
+            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911] focus:border-[#149911] shadow-sm"
           />
         </div>
 
@@ -180,7 +228,7 @@ export const UnificacaoModule: React.FC = () => {
               setFiltroFeita(e.target.value);
               setPagina(1);
             }}
-            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-xs"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-sm"
           >
             <option value="TODOS">Todos os Status</option>
             <option value="PENDENTE">Pendentes</option>
@@ -193,7 +241,7 @@ export const UnificacaoModule: React.FC = () => {
               setFiltroDesligamento(e.target.value);
               setPagina(1);
             }}
-            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-xs"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-sm"
           >
             <option value="TODOS">Todos Desligamentos</option>
             <option value="NAO_SOLICITADO">A solicitar</option>
@@ -204,7 +252,7 @@ export const UnificacaoModule: React.FC = () => {
 
           <button
             onClick={() => setIsModalNovoAberto(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#149911] hover:bg-[#256D1B] text-white text-xs font-medium rounded-xl shadow-xs transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#149911] hover:bg-[#256D1B] text-white text-xs font-medium rounded-xl shadow-sm transition-colors"
           >
             <Plus className="w-4 h-4" />
             <span>Nova Unificação</span>
@@ -221,11 +269,21 @@ export const UnificacaoModule: React.FC = () => {
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50/60 text-slate-500 font-medium">
-                <th className="py-3 px-6">Cliente & Localização</th>
-                <th className="py-3 px-4">Projetista Responsável</th>
-                <th className="py-3 px-6">Informações Técnicas</th>
-                <th className="py-3 px-4 text-center">Unificação Feita?</th>
-                <th className="py-3 px-4 text-center">Desligamento Físico</th>
+                <th className="py-3 px-6">
+                  <Ordenavel {...cabecalho('cliente')}>Cliente &amp; Localização</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('projetista')}>Projetista Responsável</Ordenavel>
+                </th>
+                <th className="py-3 px-6">
+                  <Ordenavel {...cabecalho('informacoes')}>Informações Técnicas</Ordenavel>
+                </th>
+                <th className="py-3 px-4 text-center">
+                  <Ordenavel {...cabecalho('feita')}>Unificação Feita?</Ordenavel>
+                </th>
+                <th className="py-3 px-4 text-center">
+                  <Ordenavel {...cabecalho('desligamento')}>Desligamento Físico</Ordenavel>
+                </th>
                 <th className="py-3 px-6 text-right">Ações</th>
               </tr>
             </thead>
@@ -240,7 +298,17 @@ export const UnificacaoModule: React.FC = () => {
                 unificacoesPaginadas.map(u => (
                   <tr key={u.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-3.5 px-6">
-                      <div className="font-medium text-slate-800">{u.cliente.nome}</div>
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="font-medium text-slate-800">{u.cliente.nome}</span>
+                        <button
+                          type="button"
+                          onClick={() => abrirEdicaoClientePorId(u.cliente.id)}
+                          title="Editar dados cadastrais do cliente"
+                          className="p-1 text-slate-400 hover:text-[#149911] hover:bg-slate-100 rounded-lg transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                       <div className="text-[11px] text-[#424342] flex items-center gap-2 mt-0.5">
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-slate-400" />
@@ -275,6 +343,8 @@ export const UnificacaoModule: React.FC = () => {
                         Ciclo de solicitar e aguardar retorno: cada estado oferece só a ação
                         que faz sentido a seguir. Solicitar exige a unificação feita — a API
                         recusa com 409 e o toast explica.
+                        Regra de O.S.: a O.S. na Coelba só deve ser aberta se a equipe interna
+                        NÃO fez a unificação (!u.feita).
                       */}
                       {u.desligamentoStatus === 'CONCLUIDO' ? (
                         <Badge variant="success">Desligado</Badge>
@@ -288,13 +358,19 @@ export const UnificacaoModule: React.FC = () => {
                           >
                             concluir
                           </button>
-                          <button
-                            onClick={() => abrirOrdemDeServico(u.id).catch(() => {})}
-                            className="text-[11px] font-medium text-amber-700 hover:underline"
-                            title="A equipe de campo não realizou o desligamento"
-                          >
-                            abrir O.S.
-                          </button>
+                          {!u.feita ? (
+                            <button
+                              onClick={() => abrirOrdemDeServico(u.id).catch(() => {})}
+                              className="text-[11px] font-medium text-amber-700 hover:underline"
+                              title="A equipe interna de campo não realizou o desligamento; acionar Coelba via O.S."
+                            >
+                              abrir O.S.
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-emerald-700 font-medium" title="Unificação feita internamente pela equipe ConectSol">
+                              (feita interna)
+                            </span>
+                          )}
                         </div>
                       ) : u.desligamentoStatus === 'OS_ABERTA' ? (
                         <div className="inline-flex items-center gap-1.5">
@@ -399,6 +475,22 @@ export const UnificacaoModule: React.FC = () => {
                   Solicitar Desligamento
                 </button>
               )}
+              {unificacaoSelecionada.desligamentoStatus === 'SOLICITADO' && !unificacaoSelecionada.feita && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await abrirOrdemDeServico(unificacaoSelecionada.id);
+                      setIsModalDetalheAberto(false);
+                    } catch {
+                      /* toast de erro já exibido pelo contexto */
+                    }
+                  }}
+                  className="px-3.5 py-2 text-xs font-medium text-amber-700 hover:bg-amber-50 rounded-xl transition-colors"
+                >
+                  Abrir O.S. Coelba
+                </button>
+              )}
               {(unificacaoSelecionada.desligamentoStatus === 'SOLICITADO'
                 || unificacaoSelecionada.desligamentoStatus === 'OS_ABERTA') && (
                 <button
@@ -427,7 +519,7 @@ export const UnificacaoModule: React.FC = () => {
                     /* toast de erro já exibido pelo contexto */
                   }
                 }}
-                className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs"
+                className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-sm"
               >
                 {unificacaoSelecionada.feita ? 'Reabrir Unificação' : 'Concluir Unificação'}
               </button>
@@ -436,7 +528,17 @@ export const UnificacaoModule: React.FC = () => {
         >
           <div className="space-y-4">
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100 space-y-2 text-xs">
-              <div className="font-medium text-slate-800">Dados do Cliente & Contrato</div>
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-slate-800">Dados do Cliente & Contrato</span>
+                <button
+                  type="button"
+                  onClick={() => abrirEdicaoClientePorId(unificacaoSelecionada.cliente.id)}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-[#149911] hover:bg-emerald-50 rounded-lg transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  Editar Cadastro do Cliente
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2 text-slate-600">
                 <div>Cidade: <strong className="text-slate-800">{unificacaoSelecionada.cidade ?? '—'}</strong></div>
                 <div>Vendedor: <strong className="text-slate-800">{vendedorDoCliente(unificacaoSelecionada.cliente.id) ?? '—'}</strong></div>
@@ -472,10 +574,9 @@ export const UnificacaoModule: React.FC = () => {
                 </Badge>
                 {unificacaoSelecionada.desligamentoSolicitadoEm && (
                   <p className="text-[11px] text-slate-500 mt-1.5">
-                    {/* Data crua, como no resto das telas — ver nota de formatação no CLAUDE.md */}
-                    Solicitado em {unificacaoSelecionada.desligamentoSolicitadoEm}
+                    Solicitado em {formatarData(unificacaoSelecionada.desligamentoSolicitadoEm)}
                     {unificacaoSelecionada.desligamentoConcluidoEm
-                      && ` · desligado em ${unificacaoSelecionada.desligamentoConcluidoEm}`}
+                      && ` · desligado em ${formatarData(unificacaoSelecionada.desligamentoConcluidoEm)}`}
                   </p>
                 )}
               </div>
@@ -511,7 +612,7 @@ export const UnificacaoModule: React.FC = () => {
             <button
               type="submit"
               form="form-nova-unificacao"
-              className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-xs"
+              className="px-4 py-2 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] rounded-xl transition-colors shadow-sm"
             >
               Registrar Unificação
             </button>
@@ -576,6 +677,13 @@ export const UnificacaoModule: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* Modal: Edição de Dados do Cliente */}
+      <ClienteModal
+        isOpen={isModalClienteAberto}
+        onClose={() => setIsModalClienteAberto(false)}
+        clienteEmEdicao={clienteParaEditar}
+      />
     </div>
   );
 };

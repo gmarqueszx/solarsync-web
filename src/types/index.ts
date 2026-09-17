@@ -22,6 +22,30 @@ export interface UsuarioResumo {
   nome: string;
 }
 
+/**
+ * Cadastro completo, da tela de Usuários. Diferente de `UsuarioResumo`, que é só o que os
+ * seletores de responsável precisam e é liberado a todos os papéis.
+ *
+ * `temSenha` vem do backend em vez do hash (que nunca sai da API): serve para a tela avisar
+ * quem ainda não consegue entrar. Desde a remoção do login Google, a senha é obrigatória no
+ * cadastro, então só contas antigas aparecem sem ela.
+ */
+export interface Usuario {
+  id: number;
+  nome: string;
+  email: string;
+  ativo: boolean;
+  temSenha: boolean;
+  papeis: Papel[];
+}
+
+/**
+ * Resultado da checagem de pendência na Coelba (etapa 1). `AGUARDANDO_VERIFICACAO` é a fila de
+ * trabalho: "sem pendência" precisa ser um fato registrado, senão não se distingue de
+ * "ninguém olhou ainda".
+ */
+export type StatusTriagem = 'AGUARDANDO_VERIFICACAO' | 'COM_PENDENCIA' | 'SEM_PENDENCIA';
+
 export interface Cliente {
   id: number;
   nome: string;
@@ -30,6 +54,7 @@ export interface Cliente {
   dataPagamento: string | null;
   ucCoelba: string | null;
   telefone: string | null;
+  statusTriagem: StatusTriagem;
 }
 
 export interface ClienteResumo {
@@ -39,12 +64,29 @@ export interface ClienteResumo {
   ucCoelba: string | null;
 }
 
+/**
+ * O que o formulário de cliente envia — o mesmo corpo no POST e no PUT. Só `nome` é obrigatório
+ * no contrato; o resto o analista costuma descobrir depois, e exigir tudo na criação travaria o
+ * cadastro do cliente que acabou de chegar do comercial.
+ *
+ * Fora do tipo: `id`, atribuído pela API, e `statusTriagem`, que só muda pelos endpoints de
+ * ação (`/sem-pendencia`, `/reverificar`) — corrigir o telefone não pode, de passagem, apagar
+ * o fato de que a Coelba já foi consultada.
+ */
+export type DadosCliente = Omit<Cliente, 'id' | 'statusTriagem'>;
+
 // ---------- Pendência ----------
 
 export type TipoPendencia =
   | 'TROCA_TITULARIDADE'
   | 'LIGACAO_NOVA'
   | 'EXTENSAO_REDE'
+  | 'AUMENTO_CARGA'
+  | 'MUDANCA_PADRAO'
+  | 'DESMEMBRAMENTO'
+  | 'REGULARIZACAO_CADASTRAL'
+  | 'DEBITO_VINCULADO'
+  | 'ADEQUACAO_TECNICA'
   | 'OUTRA';
 
 export type StatusPendencia = 'ABERTA' | 'EM_ANDAMENTO' | 'RESOLVIDA' | 'CANCELADA';
@@ -79,24 +121,33 @@ export interface PendenciaResumo {
 
 export type StatusDebito = 'ATIVO' | 'QUITADO';
 
+/**
+ * Que etapa o débito trava — não a natureza da dívida. São registros separados: o cliente pode
+ * estar quitado para a pendência e devendo para a homologação, e é essa distinção que diz ao
+ * financeiro onde atacar. Um cliente tem no máximo um registro de cada tipo.
+ */
+export type TipoDebito = 'PENDENCIA' | 'HOMOLOGACAO';
+
 export interface Debito {
   id: number;
   cliente: ClienteResumo;
+  tipo: TipoDebito;
   status: StatusDebito;
   ultimaConsultaEm: string | null;
+  /** Quando o débito foi constatado; é o começo do relógio de `diasParado`. */
+  detectadoEm: string | null;
+  quitadoEm: string | null;
+  /** Nulo quando não está ATIVO — nulo é "não está parado", não "parado há zero dias". */
+  diasParado: number | null;
+  consultadoPor: UsuarioResumo | null;
   criadoEm: string;
   atualizadoEm: string;
 }
 
 // ---------- Projeto ----------
 
-export type TipoProjeto =
-  | 'PADRAO'
-  | 'AMPLIACAO'
-  | 'AUMENTO_POTENCIA'
-  | 'MUDANCA_INVERSOR'
-  | 'PROJETO_UMA_PLACA_A_MAIS'
-  | 'INVERSORES_SEPARADOS';
+/** Só três na operação real; os outros da planilha eram casos operacionais, não tipos. */
+export type TipoProjeto = 'PROJETO_INICIAL' | 'AMPLIACAO' | 'CORRECAO';
 
 export type StatusProjeto =
   | 'RECEBIDO'
@@ -114,6 +165,8 @@ export interface Projeto {
   dataRecebimento: string | null;
   dataArt: string | null;
   dataEncaminhado: string | null;
+  /** Número que a Coelba devolve ao receber o projeto; casa o retorno por e-mail. */
+  numeroSolicitacao: string | null;
   status: StatusProjeto;
   motivoReprova: string | null;
   dataAprovacao: string | null;
@@ -133,6 +186,7 @@ export interface ProjetoResumo {
   analistaResponsavelNome: string | null;
   dataRecebimento: string | null;
   dataEncaminhado: string | null;
+  numeroSolicitacao: string | null;
   dataAprovacao: string | null;
   dataInstalacao: string | null;
   potenciaKwp: number | null;
@@ -164,6 +218,7 @@ export interface ProjetoLista {
   analistaResponsavel: UsuarioResumo | null;
   dataRecebimento: string | null;
   dataEncaminhado: string | null;
+  numeroSolicitacao: string | null;
   dataAprovacao: string | null;
   dataInstalacao: string | null;
   potenciaKwp: number | null;
@@ -247,6 +302,9 @@ export interface Pagina<T> {
  * período"**, e não zero — mostrar 0 faria o gestor ler "instantâneo" onde não há dado.
  */
 export interface KPIStats {
+  /** Recorte por pessoa que a API aplicou; nulo é a equipe inteira. */
+  analistaId: number | null;
+  analistaNome: string | null;
   tempoMedioSemMexerDias: number | null;
   tempoMedioResolucaoPendenciaDias: number | null;
   tempoMedioRecebimentoEnvioDias: number | null;
@@ -263,6 +321,8 @@ export interface KPIStats {
   projetosAprovados: number;
   projetosReprovados: number;
   clientesComDebitoParado: number;
+  clientesTravadosNaPendencia: number;
+  clientesTravadosNaHomologacao: number;
   clientesDebitoQuitado: number;
   vistoriasSolicitadas: number;
   vistoriasAprovadas: number;
@@ -273,28 +333,48 @@ export interface KPIStats {
   desligamentosConcluidos: number;
 }
 
+/**
+ * Recortes do dashboard. `de`/`ate` são datas puras (`YYYY-MM-DD`), como o input nativo entrega.
+ * `analistaId` ausente é a equipe inteira.
+ */
 export interface PeriodoDashboard {
   de?: string;
   ate?: string;
+  analistaId?: number;
 }
 
 // ---------- Navegação ----------
 
 export type ModuloNavegacao =
   | 'dashboard'
+  | 'clientes'
   | 'pendencias'
   | 'debitos'
   | 'projetos'
   | 'vistoria'
-  | 'unificacao';
+  | 'unificacao'
+  /** Só ADMINISTRADOR e GESTOR: é o único caminho de entrada de gente no sistema. */
+  | 'usuarios';
 
 // ---------- Rótulos ----------
 
 /** Os enums da API são chaves; o que o usuário lê fica aqui, num lugar só. */
+export const ROTULO_STATUS_TRIAGEM: Record<StatusTriagem, string> = {
+  AGUARDANDO_VERIFICACAO: 'Falta checar',
+  COM_PENDENCIA: 'Com pendência',
+  SEM_PENDENCIA: 'Sem pendência',
+};
+
 export const ROTULO_TIPO_PENDENCIA: Record<TipoPendencia, string> = {
   TROCA_TITULARIDADE: 'Troca de Titularidade',
   LIGACAO_NOVA: 'Ligação Nova',
   EXTENSAO_REDE: 'Extensão de Rede',
+  AUMENTO_CARGA: 'Aumento de Carga',
+  MUDANCA_PADRAO: 'Reforma / Mudança de Padrão',
+  DESMEMBRAMENTO: 'Desmembramento',
+  REGULARIZACAO_CADASTRAL: 'Regularização Cadastral',
+  DEBITO_VINCULADO: 'Débito Vinculado',
+  ADEQUACAO_TECNICA: 'Vistoria Reprovada / Adequação Técnica',
   OUTRA: 'Outra',
 };
 
@@ -305,13 +385,12 @@ export const ROTULO_STATUS_PENDENCIA: Record<StatusPendencia, string> = {
   CANCELADA: 'Cancelada',
 };
 
+export const TIPOS_PROJETO: TipoProjeto[] = ['PROJETO_INICIAL', 'AMPLIACAO', 'CORRECAO'];
+
 export const ROTULO_TIPO_PROJETO: Record<TipoProjeto, string> = {
-  PADRAO: 'Padrão',
-  AMPLIACAO: 'Ampliação',
-  AUMENTO_POTENCIA: 'Aumento de Potência',
-  MUDANCA_INVERSOR: 'Mudança de Inversor',
-  PROJETO_UMA_PLACA_A_MAIS: 'Uma Placa a Mais',
-  INVERSORES_SEPARADOS: 'Inversores Separados',
+  PROJETO_INICIAL: 'Projeto Inicial',
+  AMPLIACAO: 'Ampliação de Projeto Existente',
+  CORRECAO: 'Correção de Projeto',
 };
 
 export const ROTULO_STATUS_PROJETO: Record<StatusProjeto, string> = {
@@ -333,6 +412,19 @@ export const ROTULO_STATUS_DEBITO: Record<StatusDebito, string> = {
   ATIVO: 'Ativo',
   QUITADO: 'Quitado',
 };
+
+export const ROTULO_TIPO_DEBITO: Record<TipoDebito, string> = {
+  PENDENCIA: 'Trava a pendência',
+  HOMOLOGACAO: 'Trava a homologação',
+};
+
+/** Versão curta, para caber na coluna da tabela ao lado do nome do cliente. */
+export const ROTULO_TIPO_DEBITO_CURTO: Record<TipoDebito, string> = {
+  PENDENCIA: 'Pendência',
+  HOMOLOGACAO: 'Homologação',
+};
+
+export const TIPOS_DEBITO: TipoDebito[] = ['PENDENCIA', 'HOMOLOGACAO'];
 
 export const ROTULO_STATUS_DESLIGAMENTO: Record<StatusDesligamento, string> = {
   NAO_SOLICITADO: 'A solicitar',

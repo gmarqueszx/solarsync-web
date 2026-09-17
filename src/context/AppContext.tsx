@@ -12,6 +12,7 @@ import {
 } from '../api/recursos';
 import {
   Cliente,
+  DadosCliente,
   Debito,
   KPIStats,
   ModuloNavegacao,
@@ -22,6 +23,7 @@ import {
   ProjetoLista,
   ProjetoResumo,
   StatusDebito,
+  TipoDebito,
   TipoPendencia,
   TipoProjeto,
   Unificacao,
@@ -56,7 +58,10 @@ interface AppContextType {
   periodoDashboard: PeriodoDashboard;
   setPeriodoDashboard: (periodo: PeriodoDashboard) => void;
 
-  criarCliente: (dados: Partial<Cliente>) => Promise<void>;
+  criarCliente: (dados: DadosCliente) => Promise<void>;
+  atualizarCliente: (id: number, dados: DadosCliente) => Promise<void>;
+  marcarSemPendencia: (id: number) => Promise<void>;
+  reverificarCliente: (id: number) => Promise<void>;
 
   criarPendencia: (dados: {
     clienteId: number;
@@ -64,12 +69,25 @@ interface AppContextType {
     responsavelId?: number | null;
     observacao?: string | null;
   }) => Promise<void>;
+  /**
+   * Edita os dados da pendência — na prática, a observação. Vale em **qualquer** status: a
+   * observação é o parecer do que aconteceu na Coelba, e travá-la depois de resolver faria o
+   * registro parar de contar a história justamente quando ela fica completa.
+   */
+  atualizarPendencia: (
+    id: number,
+    dados: { tipo: TipoPendencia; responsavelId?: number | null; observacao?: string | null },
+  ) => Promise<void>;
   iniciarPendencia: (id: number) => Promise<void>;
   resolverPendencia: (id: number, observacao?: string) => Promise<void>;
   cancelarPendencia: (id: number, motivo: string) => Promise<void>;
   reabrirPendencia: (id: number) => Promise<void>;
 
-  registrarConsultaDebito: (clienteId: number, status: StatusDebito) => Promise<void>;
+  registrarConsultaDebito: (
+    clienteId: number,
+    tipo: TipoDebito,
+    status: StatusDebito,
+  ) => Promise<void>;
 
   criarProjeto: (dados: {
     clienteId: number;
@@ -78,8 +96,12 @@ interface AppContextType {
     potenciaKwp?: number | null;
   }) => Promise<void>;
   aguardarEnvioProjeto: (id: number) => Promise<void>;
-  encaminharProjeto: (id: number, dataArt?: string | null) => Promise<void>;
-  reencaminharProjeto: (id: number) => Promise<void>;
+  encaminharProjeto: (
+    id: number,
+    dataArt?: string | null,
+    numeroSolicitacao?: string | null,
+  ) => Promise<void>;
+  reencaminharProjeto: (id: number, numeroSolicitacao?: string | null) => Promise<void>;
   aprovarProjeto: (id: number) => Promise<void>;
   reprovarProjeto: (id: number, motivo: string) => Promise<void>;
   registrarInstalacao: (id: number, dataInstalacao: string) => Promise<void>;
@@ -110,6 +132,11 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { papel, temPapel } = useAuth();
 
+  /**
+   * Só a tela de entrada muda por papel: o gestor abre no dashboard, o analista na fila de
+   * pendências, que é o trabalho dele. **Não é restrição** — o dashboard é aberto a todos
+   * desde 09/09/2026, e o analista chega nele pela sidebar como em qualquer outro módulo.
+   */
   const [moduloAtivo, setModuloAtivoState] = useState<ModuloNavegacao>(
     temPapel('GESTOR', 'ADMINISTRADOR') ? 'dashboard' : 'pendencias',
   );
@@ -138,8 +165,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const removerToast = (id: string) => setToasts((prev) => prev.filter((t) => t.id !== id));
-
-  const podeVerDashboard = temPapel('GESTOR', 'ADMINISTRADOR');
 
   /**
    * Carrega tudo de uma vez e guarda em memória, mantendo o modelo do protótipo (listas no
@@ -181,6 +206,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           dataPagamento: null,
           ucCoelba: null,
           telefone: null,
+          // Cliente fora da página carregada: não se sabe a triagem dele. COM_PENDENCIA é o
+          // palpite honesto — ele aparece numa listagem de pendência/projeto, então foi
+          // checado —, e nunca o coloca por engano na fila de "falta checar".
+          statusTriagem: 'COM_PENDENCIA',
         };
 
       setClientes(clientesCarregados);
@@ -208,6 +237,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : null,
           dataRecebimento: p.dataRecebimento,
           dataEncaminhado: p.dataEncaminhado,
+          numeroSolicitacao: p.numeroSolicitacao,
           dataAprovacao: p.dataAprovacao,
           dataInstalacao: p.dataInstalacao,
           potenciaKwp: p.potenciaKwp,
@@ -216,12 +246,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setVistorias(respostaVistorias.conteudo);
       setUnificacoes(respostaUnificacoes.conteudo);
 
-      // O dashboard é restrito: para ANALISTA a API responde 403, então nem pedimos.
-      if (podeVerDashboard) {
-        setKpis(await dashboardApi.metricas(periodoDashboard));
-      } else {
-        setKpis(null);
-      }
+      // O dashboard é aberto a todos os papéis desde 09/09/2026: pedimos sempre.
+      setKpis(await dashboardApi.metricas(periodoDashboard));
     } catch (e) {
       const mensagem =
         e instanceof ApiError ? e.mensagemAmigavel : 'Não foi possível carregar os dados';
@@ -229,7 +255,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } finally {
       setCarregando(false);
     }
-  }, [podeVerDashboard, periodoDashboard]);
+  }, [periodoDashboard]);
 
   useEffect(() => {
     recarregar();
@@ -259,13 +285,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [recarregar, mostrarToast],
   );
 
-  const setModuloAtivo = (modulo: ModuloNavegacao) => {
-    if (modulo === 'dashboard' && !podeVerDashboard) {
-      mostrarToast('Acesso ao Dashboard restrito a Gestor e Administrador', 'alerta');
-      return;
-    }
-    setModuloAtivoState(modulo);
-  };
+  const setModuloAtivo = setModuloAtivoState;
 
   const valor: AppContextType = {
     papel,
@@ -289,9 +309,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     criarCliente: (dados) =>
       executar(() => clientesApi.criar(dados), 'Cliente cadastrado'),
+    atualizarCliente: (id, dados) =>
+      executar(() => clientesApi.atualizar(id, dados), 'Cadastro do cliente atualizado'),
+    marcarSemPendencia: (id) =>
+      executar(
+        () => clientesApi.marcarSemPendencia(id),
+        'Cliente sem pendência na Coelba — o projeto foi criado e ele entrou na fila de '
+          + 'consulta de débito',
+      ),
+    reverificarCliente: (id) =>
+      executar(() => clientesApi.reverificar(id), 'Cliente devolvido à fila de verificação'),
 
     criarPendencia: (dados) =>
       executar(() => pendenciasApi.criar(dados), 'Pendência aberta'),
+    atualizarPendencia: (id, dados) =>
+      executar(() => pendenciasApi.atualizar(id, dados), 'Observações salvas'),
     iniciarPendencia: (id) =>
       executar(() => pendenciasApi.iniciar(id), 'Pendência em andamento'),
     resolverPendencia: (id, observacao) =>
@@ -304,19 +336,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reabrirPendencia: (id) =>
       executar(() => pendenciasApi.reabrir(id), 'Pendência reaberta'),
 
-    registrarConsultaDebito: (clienteId, status) =>
+    registrarConsultaDebito: (clienteId, tipo, status) =>
       executar(
-        () => debitosApi.registrarConsulta(clienteId, status),
-        status === 'ATIVO' ? 'Débito registrado' : 'Débito quitado',
+        () => debitosApi.registrarConsulta(clienteId, tipo, status),
+        status === 'ATIVO'
+          ? `Débito registrado — ${
+              tipo === 'PENDENCIA' ? 'trava a pendência' : 'trava a homologação'
+            }`
+          : 'Débito quitado',
       ),
 
     criarProjeto: (dados) => executar(() => projetosApi.criar(dados), 'Projeto criado'),
     aguardarEnvioProjeto: (id) =>
       executar(() => projetosApi.aguardarEnvio(id), 'Projeto aguardando envio'),
-    encaminharProjeto: (id, dataArt) =>
-      executar(() => projetosApi.encaminhar(id, dataArt), 'Projeto encaminhado à Coelba'),
-    reencaminharProjeto: (id) =>
-      executar(() => projetosApi.reencaminhar(id), 'Projeto reencaminhado'),
+    encaminharProjeto: (id, dataArt, numeroSolicitacao) =>
+      executar(
+        () => projetosApi.encaminhar(id, dataArt, undefined, numeroSolicitacao),
+        'Projeto encaminhado à Coelba',
+      ),
+    reencaminharProjeto: (id, numeroSolicitacao) =>
+      executar(
+        () => projetosApi.reencaminhar(id, undefined, numeroSolicitacao),
+        'Projeto reencaminhado',
+      ),
     aprovarProjeto: (id) => executar(() => projetosApi.aprovar(id), 'Projeto aprovado'),
     reprovarProjeto: (id, motivo) =>
       executar(() => projetosApi.reprovar(id, motivo), 'Reprova registrada'),

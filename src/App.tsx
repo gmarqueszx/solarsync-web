@@ -1,26 +1,29 @@
 import React from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { LoginScreen } from './components/LoginScreen';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { DashboardModule } from './components/modules/DashboardModule';
+import { ClientesModule } from './components/modules/ClientesModule';
 import { PendenciasModule } from './components/modules/PendenciasModule';
 import { DebitosModule } from './components/modules/DebitosModule';
 import { ProjetosModule } from './components/modules/ProjetosModule';
 import { VistoriaModule } from './components/modules/VistoriaModule';
 import { UnificacaoModule } from './components/modules/UnificacaoModule';
+import { UsuariosModule } from './components/modules/UsuariosModule';
 import { ToastContainer } from './components/common/Toast';
 
 const MainContent: React.FC = () => {
-  const { moduloAtivo, papel, carregando, erro, recarregar } = useApp();
+  const { moduloAtivo, carregando, erro, recarregar } = useApp();
 
   const renderModulo = () => {
     switch (moduloAtivo) {
       case 'dashboard':
-        // A API responde 403 para ANALISTA; a tela nem chega a pedir.
-        if (papel === 'ANALISTA') return <PendenciasModule />;
         return <DashboardModule />;
+      case 'clientes':
+        return <ClientesModule />;
       case 'pendencias':
         return <PendenciasModule />;
       case 'debitos':
@@ -31,6 +34,8 @@ const MainContent: React.FC = () => {
         return <VistoriaModule />;
       case 'unificacao':
         return <UnificacaoModule />;
+      case 'usuarios':
+        return <UsuariosModule />;
       default:
         return <PendenciasModule />;
     }
@@ -94,9 +99,11 @@ const Autenticado: React.FC = () => {
 };
 
 export const App: React.FC = () => (
-  <AuthProvider>
-    <Autenticado />
-  </AuthProvider>
+  <ThemeProvider>
+    <AuthProvider>
+      <Autenticado />
+    </AuthProvider>
+  </ThemeProvider>
 );
 
 export default App;

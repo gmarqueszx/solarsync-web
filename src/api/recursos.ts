@@ -5,10 +5,12 @@
 import { api } from './client';
 import {
   Cliente,
+  DadosCliente,
   Debito,
   HistoricoStatus,
   KPIStats,
   Pagina,
+  Papel,
   Pendencia,
   PendenciaResumo,
   PeriodoDashboard,
@@ -18,10 +20,13 @@ import {
   StatusDesligamento,
   StatusPendencia,
   StatusProjeto,
+  StatusTriagem,
   StatusVistoria,
+  TipoDebito,
   TipoPendencia,
   TipoProjeto,
   Unificacao,
+  Usuario,
   UsuarioLogado,
   UsuarioResumo,
   Vistoria,
@@ -40,24 +45,46 @@ export interface RespostaToken {
   usuario: UsuarioLogado;
 }
 
+/**
+ * Só e-mail e senha. Não há login federado nem auto-cadastro desde 16/09/2026: quem entra
+ * precisa ter sido cadastrado por um ADMINISTRADOR ou GESTOR na tela de Usuários.
+ */
 export const authApi = {
   login: (email: string, senha: string) =>
     api.publico<RespostaToken>('/api/auth/login', { email, senha }),
-  loginGoogle: (idToken: string) =>
-    api.publico<RespostaToken>('/api/auth/login/google', { idToken }),
   eu: () => api.get<UsuarioLogado>('/api/auth/eu'),
 };
 
 // ---------- Clientes ----------
 
+export interface FiltroCliente {
+  /** Casa nome **ou** UC Coelba — é como o analista procura. */
+  nome?: string;
+  statusTriagem?: StatusTriagem[];
+  /** Sem nenhuma consulta de débito registrada: a fila da consulta pré projeto. */
+  semConsultaDebito?: boolean;
+}
+
 export const clientesApi = {
-  /** O parâmetro `nome` casa nome **ou** UC Coelba — é como o analista procura. */
-  listar: (busca?: string) =>
-    api.get<Pagina<Cliente>>('/api/clientes', { nome: busca, size: TAMANHO_PADRAO }),
+  listar: (filtro: FiltroCliente = {}) =>
+    api.get<Pagina<Cliente>>('/api/clientes', {
+      ...filtro,
+      statusTriagem: filtro.statusTriagem?.join(','),
+      size: TAMANHO_PADRAO,
+    }),
   buscar: (id: number) => api.get<Cliente>(`/api/clientes/${id}`),
-  criar: (dados: Partial<Cliente>) => api.post<Cliente>('/api/clientes', dados),
-  atualizar: (id: number, dados: Partial<Cliente>) =>
+  historico: (id: number) => api.get<HistoricoStatus[]>(`/api/clientes/${id}/historico`),
+  criar: (dados: DadosCliente) => api.post<Cliente>('/api/clientes', dados),
+  /** O PUT substitui o cadastro inteiro: mande sempre todos os campos, não só o alterado. */
+  atualizar: (id: number, dados: DadosCliente) =>
     api.put<Cliente>(`/api/clientes/${id}`, dados),
+
+  // Triagem da etapa 1: status é endpoint de ação, nunca campo do PUT.
+  /** Checou a Coelba e não há pendência: cria o projeto em RECEBIDO e libera a etapa 2. */
+  marcarSemPendencia: (id: number) =>
+    api.post<Cliente>(`/api/clientes/${id}/sem-pendencia`),
+  /** Devolve o cliente para a fila de verificação (novo ciclo ou marcação errada). */
+  reverificar: (id: number) => api.post<Cliente>(`/api/clientes/${id}/reverificar`),
 };
 
 // ---------- Usuários ----------
@@ -65,6 +92,28 @@ export const clientesApi = {
 export const usuariosApi = {
   /** Alimenta os seletores de responsável e analista. Liberado a todos os papéis. */
   lookup: () => api.get<UsuarioResumo[]>('/api/usuarios/lookup', { ativo: true }),
+
+  // Daqui para baixo, só ADMINISTRADOR e GESTOR — a API responde 403 para ANALISTA.
+  /** Inclui os inativos: a tela precisa mostrar quem foi desligado, não escondê-lo. */
+  listar: () => api.get<Usuario[]>('/api/usuarios'),
+  /**
+   * A senha é obrigatória e provisória. Um GESTOR que tente criar um ADMINISTRADOR leva 403:
+   * conceder esse papel é só do administrador.
+   */
+  criar: (dados: { nome: string; email: string; papeis: Papel[]; senha: string }) =>
+    api.post<Usuario>('/api/usuarios', dados),
+  /** Sem senha: trocá-la é `definirSenha`, para um ajuste de nome não resetar o acesso. */
+  atualizar: (id: number, dados: { nome: string; email: string; papeis: Papel[] }) =>
+    api.put<Usuario>(`/api/usuarios/${id}`, dados),
+  definirSenha: (id: number, senha: string) =>
+    api.post<Usuario>(`/api/usuarios/${id}/senha`, { senha }),
+  ativar: (id: number) => api.post<Usuario>(`/api/usuarios/${id}/ativar`),
+  /**
+   * O caminho certo para quem saiu da empresa: o acesso morre em minutos e a auditoria fica
+   * de pé. Excluir de verdade é só do ADMINISTRADOR e falha se a pessoa já aparece no
+   * histórico — por isso não há botão de excluir na tela.
+   */
+  desativar: (id: number) => api.post<Usuario>(`/api/usuarios/${id}/desativar`),
 };
 
 // ---------- Pendências ----------
@@ -75,6 +124,13 @@ export interface FiltroPendencia {
   tipo?: TipoPendencia;
   responsavelId?: number;
   q?: string;
+  /**
+   * As duas filas de pendência que não podem ser resolvidas. São **derivadas** (pendência
+   * aberta + situação do débito), não status: a pendência travada continua ABERTA ou
+   * EM_ANDAMENTO, e um status próprio viveria dessincronizado do débito.
+   */
+  travadaPorDebito?: boolean;
+  semConsultaDebito?: boolean;
 }
 
 export const pendenciasApi = {
@@ -111,14 +167,31 @@ export const pendenciasApi = {
 
 // ---------- Débitos ----------
 
+export interface FiltroDebito {
+  clienteId?: number;
+  tipo?: TipoDebito;
+  status?: StatusDebito;
+  q?: string;
+  /** Só os ATIVO detectados há mais de N dias: a fila que o financeiro persegue. */
+  paradoHaMaisDeDias?: number;
+}
+
 export const debitosApi = {
-  listar: (status?: StatusDebito) =>
-    api.get<Pagina<Debito>>('/api/debitos', { status, size: TAMANHO_PADRAO }),
-  porCliente: (clienteId: number) => api.get<Debito>(`/api/debitos/cliente/${clienteId}`),
+  listar: (filtro: FiltroDebito = {}) =>
+    api.get<Pagina<Debito>>('/api/debitos', { ...filtro, size: TAMANHO_PADRAO }),
+  /** Até dois registros: o que trava a pendência e o que trava a homologação. */
+  porCliente: (clienteId: number) => api.get<Debito[]>(`/api/debitos/cliente/${clienteId}`),
   historico: (id: number) => api.get<HistoricoStatus[]>(`/api/debitos/${id}/historico`),
-  /** Idempotente: registrar de novo atualiza a mesma linha, não cria outra. */
-  registrarConsulta: (clienteId: number, status: StatusDebito, consultadoEm?: string) =>
-    api.put<Debito>(`/api/debitos/cliente/${clienteId}`, { status, consultadoEm }),
+  /**
+   * Idempotente por `(cliente, tipo)`: registrar de novo atualiza a mesma linha, não cria outra.
+   * O tipo é obrigatório — é ele que diz qual etapa esta consulta responde.
+   */
+  registrarConsulta: (
+    clienteId: number,
+    tipo: TipoDebito,
+    status: StatusDebito,
+    consultadoEm?: string,
+  ) => api.put<Debito>(`/api/debitos/cliente/${clienteId}`, { tipo, status, consultadoEm }),
 };
 
 // ---------- Projetos ----------
@@ -129,9 +202,16 @@ export interface FiltroProjeto {
   tipoProjeto?: TipoProjeto;
   analistaResponsavelId?: number;
   q?: string;
-  /** Combinados, dão a fila da etapa 4: instalado e ainda sem vistoria. */
+  /**
+   * `status=['APROVADO'] + semVistoria` é a fila da etapa 4: projeto homologado esperando
+   * alguém registrar a instalação e pedir a vistoria.
+   */
   instalado?: boolean;
   semVistoria?: boolean;
+  /** Projetos por enviar cujo cliente tem débito de homologação ativo. */
+  travadoPorDebito?: boolean;
+  /** Projetos por enviar cujo débito de homologação nunca foi consultado. */
+  semConsultaDebito?: boolean;
 }
 
 export const projetosApi = {
@@ -149,6 +229,7 @@ export const projetosApi = {
     analistaResponsavelId?: number | null;
     dataRecebimento?: string | null;
     dataArt?: string | null;
+    numeroSolicitacao?: string | null;
     potenciaKwp?: number | null;
   }) => api.post<Projeto>('/api/projetos', dados),
   atualizar: (
@@ -158,16 +239,38 @@ export const projetosApi = {
       analistaResponsavelId?: number | null;
       dataRecebimento?: string | null;
       dataArt?: string | null;
+      numeroSolicitacao?: string | null;
       potenciaKwp?: number | null;
     },
   ) => api.put<Projeto>(`/api/projetos/${id}`, dados),
 
   aguardarEnvio: (id: number) => api.post<Projeto>(`/api/projetos/${id}/aguardar-envio`),
-  /** Falha com 409 CLIENTE_COM_DEBITO se o cliente estiver devendo. */
-  encaminhar: (id: number, dataArt?: string | null, dataEncaminhado?: string | null) =>
-    api.post<Projeto>(`/api/projetos/${id}/encaminhar`, { dataArt, dataEncaminhado }),
-  reencaminhar: (id: number, dataEncaminhado?: string | null) =>
-    api.post<Projeto>(`/api/projetos/${id}/reencaminhar`, { dataEncaminhado }),
+  /**
+   * Falha com 409 `CLIENTE_COM_DEBITO` se o cliente estiver devendo, e com 409
+   * `DEBITO_NAO_CONSULTADO` se ninguém tiver consultado o débito de homologação — que é o passo
+   * do projetista ao receber o cliente.
+   */
+  encaminhar: (
+    id: number,
+    dataArt?: string | null,
+    dataEncaminhado?: string | null,
+    numeroSolicitacao?: string | null,
+  ) =>
+    api.post<Projeto>(`/api/projetos/${id}/encaminhar`, {
+      dataArt,
+      dataEncaminhado,
+      numeroSolicitacao,
+    }),
+  /** Sem `numeroSolicitacao`, mantém o número já registrado. */
+  reencaminhar: (
+    id: number,
+    dataEncaminhado?: string | null,
+    numeroSolicitacao?: string | null,
+  ) =>
+    api.post<Projeto>(`/api/projetos/${id}/reencaminhar`, {
+      dataEncaminhado,
+      numeroSolicitacao,
+    }),
   aprovar: (id: number, dataAprovacao?: string | null) =>
     api.post<Projeto>(`/api/projetos/${id}/aprovar`, { dataAprovacao }),
   reprovar: (id: number, motivo: string) =>
@@ -250,6 +353,7 @@ export const unificacoesApi = {
 
 interface DashboardResposta {
   periodo: { de: string | null; ate: string | null };
+  filtro: { analistaId: number | null; analistaNome: string | null };
   temposMediosEmDias: {
     semNinguemMexerNoCliente: number | null;
     resolucaoDePendencia: number | null;
@@ -268,6 +372,8 @@ interface DashboardResposta {
     projetosAprovados: number;
     projetosReprovados: number;
     clientesComDebitoAtivo: number;
+    clientesTravadosNaPendencia: number;
+    clientesTravadosNaHomologacao: number;
     clientesComDebitoQuitado: number;
     vistoriasSolicitadas: number;
     vistoriasAprovadas: number;
@@ -280,14 +386,24 @@ interface DashboardResposta {
 }
 
 export const dashboardApi = {
-  /** Restrito a GESTOR e ADMINISTRADOR: para ANALISTA a API responde 403. */
+  /**
+   * Aberto a todos os papéis desde 09/09/2026.
+   *
+   * `analistaId` recorta tudo pelo responsável da etapa — que é uma coluna diferente em cada
+   * uma (responsável da pendência, analista do projeto, quem consultou o débito, projetista da
+   * unificação). O nome do analista volta na resposta para a tela rotular os números sem
+   * cruzar com a lista de usuários.
+   */
   async metricas(periodo: PeriodoDashboard = {}): Promise<KPIStats> {
     const r = await api.get<DashboardResposta>('/api/dashboard', {
       de: periodo.de,
       ate: periodo.ate,
+      analistaId: periodo.analistaId,
     });
     // Achata a resposta agrupada da API no formato que as telas já usavam.
     return {
+      analistaId: r.filtro.analistaId,
+      analistaNome: r.filtro.analistaNome,
       tempoMedioSemMexerDias: r.temposMediosEmDias.semNinguemMexerNoCliente,
       tempoMedioResolucaoPendenciaDias: r.temposMediosEmDias.resolucaoDePendencia,
       tempoMedioRecebimentoEnvioDias: r.temposMediosEmDias.recebimentoAteEnvio,
@@ -303,6 +419,8 @@ export const dashboardApi = {
       projetosAprovados: r.quantitativos.projetosAprovados,
       projetosReprovados: r.quantitativos.projetosReprovados,
       clientesComDebitoParado: r.quantitativos.clientesComDebitoAtivo,
+      clientesTravadosNaPendencia: r.quantitativos.clientesTravadosNaPendencia,
+      clientesTravadosNaHomologacao: r.quantitativos.clientesTravadosNaHomologacao,
       clientesDebitoQuitado: r.quantitativos.clientesComDebitoQuitado,
       vistoriasSolicitadas: r.quantitativos.vistoriasSolicitadas,
       vistoriasAprovadas: r.quantitativos.vistoriasAprovadas,

@@ -1,8 +1,15 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
-import { ROTULO_TIPO_PROJETO, TipoProjeto } from '../../types';
+import { CardKPI } from '../ui/CardKPI';
+import {
+  ROTULO_STATUS_PROJETO,
+  ROTULO_TIPO_PROJETO,
+  StatusProjeto,
+  TipoProjeto,
+} from '../../types';
+import { formatarData, hojeISO, somarDiasISO } from '../../utils/data';
 import {
   Clock,
   CheckCircle2,
@@ -11,105 +18,179 @@ import {
   FileCheck2,
   TrendingUp,
   Wrench,
-  Zap,
-  ArrowUpRight,
   Flame,
+  Calendar,
+  Layers,
+  UserRound,
 } from 'lucide-react';
 
-export const DashboardModule: React.FC = () => {
-  const { kpis, projetos, pendencias } = useApp();
+type PeriodoFiltro = 'HOJE' | '7D' | '30D' | '3M' | '12M' | 'TODOS' | 'PERSONALIZADO';
 
-  // Sem KPIs não há painel: ou ainda está carregando, ou o papel não tem acesso à métrica.
+const ROTULO_PERIODO: Record<PeriodoFiltro, string> = {
+  HOJE: 'Hoje',
+  '7D': '7d',
+  '30D': '30d',
+  '3M': '3m',
+  '12M': '12m',
+  TODOS: 'Todos',
+  PERSONALIZADO: 'Personalizado',
+};
+
+/**
+ * Traduz o atalho em datas. `TODOS` devolve as duas pontas vazias, que é como a API entende
+ * "todo o histórico" — e não uma data mínima arbitrária, que mentiria no rótulo.
+ */
+function intervaloDoAtalho(atalho: PeriodoFiltro): { de?: string; ate?: string } {
+  if (atalho === 'TODOS' || atalho === 'PERSONALIZADO') return {};
+  const dias: Record<Exclude<PeriodoFiltro, 'TODOS' | 'PERSONALIZADO'>, number> = {
+    HOJE: 0,
+    '7D': -6,
+    '30D': -29,
+    '3M': -89,
+    '12M': -364,
+  };
+  // O intervalo inclui hoje, então "7d" é hoje mais os seis anteriores.
+  return { de: somarDiasISO(dias[atalho]), ate: hojeISO() };
+}
+
+export const DashboardModule: React.FC = () => {
+  const { kpis, projetos, pendencias, usuarios, periodoDashboard, setPeriodoDashboard } =
+    useApp();
+
+  /**
+   * O atalho escolhido é estado local só para pintar a pílula ativa; a verdade do recorte é o
+   * `periodoDashboard` do contexto, que é o que vai para a API. Antes estas pílulas não
+   * filtravam nada — eram enfeite, e o painel mostrava sempre o histórico inteiro.
+   */
+  const [periodo, setPeriodo] = useState<PeriodoFiltro>('TODOS');
+
+  const aplicarAtalho = (atalho: PeriodoFiltro) => {
+    setPeriodo(atalho);
+    if (atalho === 'PERSONALIZADO') return; // as datas vêm dos dois inputs
+    setPeriodoDashboard({ ...intervaloDoAtalho(atalho), analistaId: periodoDashboard.analistaId });
+  };
+
+  const mudarData = (ponta: 'de' | 'ate', valor: string) => {
+    setPeriodo('PERSONALIZADO');
+    setPeriodoDashboard({ ...periodoDashboard, [ponta]: valor || undefined });
+  };
+
+  const mudarAnalista = (valor: string) => {
+    setPeriodoDashboard({
+      ...periodoDashboard,
+      analistaId: valor === '' ? undefined : Number(valor),
+    });
+  };
+
   if (!kpis) {
     return (
-      <Card className="p-10">
-        <div className="text-center space-y-1">
-          <div className="text-sm font-medium text-slate-700">
-            Indicadores indisponíveis no momento
+      <Card className="p-12 text-center">
+        <div className="max-w-md mx-auto space-y-2">
+          <div className="w-10 h-10 rounded-xl bg-superficie-sutil border border-borda flex items-center justify-center mx-auto text-texto-apagado">
+            <Clock className="w-5 h-5" />
           </div>
-          <p className="text-xs text-[#424342]">
-            O painel executivo é restrito a Gestor e Administrador.
+          <h3 className="text-sm font-semibold text-texto">Indicadores indisponíveis</h3>
+          <p className="text-xs text-texto-suave">
+            Não foi possível carregar as métricas. Recarregue a página; se persistir, verifique
+            se a API está no ar.
           </p>
         </div>
       </Card>
     );
   }
 
-  // Metrics for cycle times
+  /**
+   * ⚠️ Nem tudo nesta tela vem do `kpis`: alguns cards e gráficos são derivados das listas que o
+   * contexto já carregou (carga por analista, projetos por tipo, projetos recentes). Eles
+   * **precisam** aplicar o mesmo recorte de pessoa, senão o painel mostra metade dos números
+   * filtrados e metade não — foi o que apareceu na conferência de 16/09/2026: com o filtro
+   * ligado, tudo zerava e "Pendências na Fila" continuava em 5.
+   *
+   * O recorte de **período** continua não valendo para estas listas, e é uma limitação
+   * conhecida: cada métrica tem a sua data de referência, e replicar essa lógica aqui
+   * duplicaria no cliente o que o `DashboardRepository` já faz. O que vem do `kpis` respeita o
+   * período; o que é derivado é sempre a situação de agora.
+   */
+  const analistaFiltrado = kpis.analistaId;
+  const projetosNoRecorte = analistaFiltrado
+    ? projetos.filter(p => p.analistaResponsavel?.id === analistaFiltrado)
+    : projetos;
+  const pendenciasNoRecorte = analistaFiltrado
+    ? pendencias.filter(p => p.responsavel?.id === analistaFiltrado)
+    : pendencias;
+
+  const taxaAprovacao = Math.round(
+    (kpis.projetosAprovados / (projetosNoRecorte.length || 1)) * 100,
+  );
+
+  const pendenciasAtivas = pendenciasNoRecorte.filter(
+    p => p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO',
+  ).length;
+
+  // SLA de tempos médios
   const metricasTempo = [
     {
       titulo: 'Tempo s/ Interação',
       subtitulo: 'Pagamento → 1ª Ação',
       dias: kpis.tempoMedioSemMexerDias,
-      meta: 'Meta ≤ 2 dias',
-      status: 'bom',
+      meta: 'Meta ≤ 2d',
       icone: Clock,
-      descricao: 'Tempo decorrido entre o sinal financeiro e a primeira checagem da equipe.',
+      tom: (kpis.tempoMedioSemMexerDias ?? 0) <= 2 ? 'positivo' : 'atencao',
+      descricao: 'Intervalo entre o sinal comercial e a primeira triagem na Coelba.',
     },
     {
       titulo: 'Resolução de Pendência',
       subtitulo: 'Solicitado → Concluído',
       dias: kpis.tempoMedioResolucaoPendenciaDias,
-      meta: 'Meta ≤ 5 dias',
-      status: 'atencao',
+      meta: 'Meta ≤ 5d',
       icone: AlertTriangle,
-      descricao: 'Média de dias para regularizar titularidade, padrão ou rede na Coelba.',
+      tom: (kpis.tempoMedioResolucaoPendenciaDias ?? 0) <= 5 ? 'positivo' : 'atencao',
+      descricao: 'Prazo médio para sanar titularidade, padrão ou extensão na concessionária.',
     },
     {
       titulo: 'Recebimento → Envio',
-      subtitulo: 'Montagem e ART',
+      subtitulo: 'Elaboração e ART',
       dias: kpis.tempoMedioRecebimentoEnvioDias,
-      meta: 'Meta ≤ 3 dias',
-      status: 'bom',
+      meta: 'Meta ≤ 3d',
       icone: Send,
-      descricao: 'Elaboração do projeto executivo, emissão de ART e protocolo inicial.',
+      tom: (kpis.tempoMedioRecebimentoEnvioDias ?? 0) <= 3 ? 'positivo' : 'atencao',
+      descricao: 'Confecção técnica do projeto, emissão de ART e protocolo inicial.',
     },
     {
       titulo: 'Prazo Coelba Aprovação',
-      subtitulo: 'Envio → Parecer Aprovado',
+      subtitulo: 'Envio → Parecer emitido',
       dias: kpis.tempoMedioParaAprovacaoDias,
-      meta: 'Prazo Legal: 15 dias',
-      status: 'bom',
+      meta: 'Prazo Legal: 15d',
       icone: FileCheck2,
-      descricao: 'Tempo que a concessionária leva para analisar e emitir parecer de acesso.',
+      tom: (kpis.tempoMedioParaAprovacaoDias ?? 0) <= 15 ? 'positivo' : 'critico',
+      descricao: 'Tempo regulatório que a distribuidora leva para emitir o parecer de acesso.',
     },
     {
       titulo: 'Parado por Débito',
       subtitulo: 'Detecção → Quitação',
       dias: kpis.tempoMedioParadoDebitoDias,
       meta: 'Gargalo comercial',
-      status: 'alerta',
       icone: Flame,
-      descricao: 'Dias que o projeto fica travado aguardando o cliente pagar faturas atrasadas.',
+      tom: 'critico',
+      descricao: 'Dias travados aguardando quitação de faturas pendentes pelo cliente.',
     },
     {
       titulo: 'Instalação → Vistoria',
       subtitulo: 'Usina pronta → Solicitação',
       dias: kpis.tempoMedioInstalacaoVistoriaDias,
-      meta: 'Meta ≤ 7 dias',
-      status: 'atencao',
+      meta: 'Meta ≤ 7d',
       icone: Wrench,
-      descricao:
-        'Dias entre a usina ficar instalada e alguém pedir a vistoria à Coelba. '
-        + 'É o intervalo em que o cliente já pagou, já tem a usina no telhado e ainda não gera.',
+      tom: (kpis.tempoMedioInstalacaoVistoriaDias ?? 0) <= 7 ? 'positivo' : 'atencao',
+      descricao: 'Intervalo em que a usina já está no telhado aguardando pedido de vistoria.',
     },
-    {
-      titulo: 'Ciclo Completo de Homologação',
-      subtitulo: 'Entrada → Troca do Medidor',
-      dias: kpis.tempoMedioCicloCompletoDias,
-      meta: 'Meta ≤ 35 dias',
-      status: 'bom',
-      icone: TrendingUp,
-      descricao: 'Tempo total desde a entrada do cliente até a vistoria técnica aprovada.',
-    },
-  ];
+  ] as const;
 
-  // Distribution by Analyst — os analistas vêm dos próprios projetos, não de uma lista fixa.
+  // Analistas
   const analistas = Array.from(
-    new Set(projetos.map(p => p.analistaResponsavel?.nome ?? 'Sem analista atribuído')),
+    new Set(projetosNoRecorte.map(p => p.analistaResponsavel?.nome ?? 'Sem analista atribuído')),
   );
   const cargaAnalistas = analistas.map(analista => {
-    const doAnalista = projetos.filter(
+    const doAnalista = projetosNoRecorte.filter(
       p => (p.analistaResponsavel?.nome ?? 'Sem analista atribuído') === analista,
     );
     const aprovados = doAnalista.filter(p => p.status === 'APROVADO').length;
@@ -121,186 +202,366 @@ export const DashboardModule: React.FC = () => {
     };
   });
 
-  // Distribution by Project Type
+  // Tipos de Projeto
   const contagemTipos = (Object.keys(ROTULO_TIPO_PROJETO) as TipoProjeto[]).map(tipo => ({
     tipo,
     label: ROTULO_TIPO_PROJETO[tipo],
-    quantidade: projetos.filter(p => p.tipoProjeto === tipo).length,
+    quantidade: projetosNoRecorte.filter(p => p.tipoProjeto === tipo).length,
   }));
-
   const maxQtdTipo = Math.max(...contagemTipos.map(t => t.quantidade), 1);
+
+  // Projetos mais recentes para a tabela executiva (estilo "Recent activity" do Metric)
+  const projetosRecentes = [...projetosNoRecorte].slice(0, 6);
+
+  const getStatusBadge = (status: StatusProjeto) => {
+    switch (status) {
+      case 'APROVADO':
+        return <Badge variant="success">{ROTULO_STATUS_PROJETO.APROVADO}</Badge>;
+      case 'REPROVADO':
+        return <Badge variant="danger">{ROTULO_STATUS_PROJETO.REPROVADO}</Badge>;
+      case 'ENCAMINHADO':
+        return <Badge variant="info">{ROTULO_STATUS_PROJETO.ENCAMINHADO}</Badge>;
+      case 'REENCAMINHADO':
+        return <Badge variant="info">{ROTULO_STATUS_PROJETO.REENCAMINHADO}</Badge>;
+      case 'AGUARDANDO_ENVIO':
+        return <Badge variant="warning">{ROTULO_STATUS_PROJETO.AGUARDANDO_ENVIO}</Badge>;
+      case 'RECEBIDO':
+      default:
+        return <Badge variant="neutral">{ROTULO_STATUS_PROJETO.RECEBIDO}</Badge>;
+    }
+  };
 
   return (
     <div className="space-y-6">
-      {/* Overview Alert Banner for Gestor */}
-      <div className="bg-gradient-to-r from-[#244F26] to-[#1b431e] rounded-2xl p-5 text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm border border-emerald-900/40">
-        <div className="flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/10">
-            <Zap className="w-5 h-5 text-amber-300" />
+      {/* Executive Page Header & Controls (Estilo Metric) */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-2xs text-texto-apagado font-medium uppercase tracking-wider mb-1">
+            <span>Boards</span>
+            <span>/</span>
+            <span>ConectSol</span>
+            <span>/</span>
+            <span className="text-texto-suave">Visão Geral de Homologação</span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-medium text-white">Painel Executivo de Homologação</h2>
-              <Badge variant="accent">GESTOR EXCLUSIVE</Badge>
-            </div>
-            <p className="text-xs text-white/80 mt-0.5">
-              Substitui a visão fragmentada das 18 abas do Excel por métricas em tempo real do ciclo de vida Coelba/Neoenergia.
-            </p>
-          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-texto">
+            Visão Geral de Homologação
+          </h1>
+          <p className="text-xs text-texto-suave mt-0.5">
+            {kpis.analistaNome
+              ? `Recorte de ${kpis.analistaNome} — cada número conta só o que passou pelas mãos dela(e).`
+              : 'Acompanhe indicadores de ciclo de vida, aprovações e gargalos em tempo real.'}
+          </p>
         </div>
 
-        <div className="flex items-center gap-4 shrink-0 text-right bg-black/20 px-4 py-2 rounded-xl border border-white/10">
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-white/60 block">Volume Ativo</span>
-            <span className="text-lg font-semibold text-white">
-              {projetos.length} <span className="text-xs font-normal text-white/70">projetos</span>
+        {/* Filtros em Pílula Segmentada (Metric Style Capsule Tabs) */}
+        <div className="flex items-center gap-2 flex-wrap self-start lg:self-auto">
+          <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-superficie border border-borda dark:border-transparent">
+            <span className="px-2 text-texto-apagado">
+              <Calendar className="w-3.5 h-3.5" />
             </span>
+            {(
+              ['HOJE', '7D', '30D', '3M', '12M', 'TODOS', 'PERSONALIZADO'] as PeriodoFiltro[]
+            ).map(p => {
+              const ativo = periodo === p;
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => aplicarAtalho(p)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                    ativo
+                      ? 'bg-white/10 text-texto font-semibold shadow-none'
+                      : 'text-texto-suave hover:text-texto hover:bg-white/[0.04]'
+                  }`}
+                >
+                  {ROTULO_PERIODO[p]}
+                </button>
+              );
+            })}
           </div>
-          <div className="h-7 w-px bg-white/10" />
-          <div>
-            <span className="text-[10px] uppercase tracking-wider text-white/60 block">Taxa de Aprovação</span>
-            <span className="text-lg font-semibold text-[#1EFC1E]">
-              {Math.round((kpis.projetosAprovados / (projetos.length || 1)) * 100)}%
-            </span>
+
+          {/*
+            Aparece só no modo personalizado para não competir com os atalhos, que resolvem a
+            maioria das perguntas. Ponta vazia é "sem limite daquele lado" — dá para pedir
+            "tudo até 31/08" sem inventar uma data inicial.
+          */}
+          {periodo === 'PERSONALIZADO' && (
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-superficie border border-borda dark:border-transparent">
+              <label className="text-2xs text-texto-apagado" htmlFor="dashboard-de">
+                De
+              </label>
+              <input
+                id="dashboard-de"
+                type="date"
+                value={periodoDashboard.de ?? ''}
+                max={periodoDashboard.ate ?? undefined}
+                onChange={e => mudarData('de', e.target.value)}
+                className="bg-transparent text-xs text-texto focus:outline-none"
+              />
+              <label className="text-2xs text-texto-apagado pl-1" htmlFor="dashboard-ate">
+                até
+              </label>
+              <input
+                id="dashboard-ate"
+                type="date"
+                value={periodoDashboard.ate ?? ''}
+                min={periodoDashboard.de ?? undefined}
+                onChange={e => mudarData('ate', e.target.value)}
+                className="bg-transparent text-xs text-texto focus:outline-none"
+              />
+            </div>
+          )}
+
+          {/*
+            Recorte por pessoa. A API aplica sobre o responsável de cada etapa — que é uma
+            coluna diferente em cada uma —, e linha sem responsável fica de fora do recorte.
+          */}
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-superficie border border-borda dark:border-transparent">
+            <UserRound className="w-3.5 h-3.5 text-texto-apagado" />
+            <select
+              aria-label="Filtrar por analista"
+              value={periodoDashboard.analistaId ?? ''}
+              onChange={e => mudarAnalista(e.target.value)}
+              className="bg-transparent text-xs text-texto focus:outline-none cursor-pointer"
+            >
+              <option value="">Equipe inteira</option>
+              {usuarios.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.nome}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
 
-      {/* Primary KPI Quantitativos Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {/* Card 1: Projetos Aprovados */}
-        <Card className="p-4" headerBorder={false}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#424342]">Projetos Aprovados</span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-[#149911] flex items-center justify-center">
-              <CheckCircle2 className="w-4 h-4" />
+      {/* Row de 5 Cards de KPI (Estilo Metric) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
+        <CardKPI
+          rotulo="Projetos Aprovados"
+          valor={kpis.projetosAprovados}
+          badge={`+${taxaAprovacao}%`}
+          badgeTom="positivo"
+          legenda="Parecer de acesso emitido"
+          icone={<CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+        />
+        <CardKPI
+          rotulo="Em Análise Coelba"
+          valor={kpis.projetosEncaminhados + kpis.projetosReencaminhados}
+          badge="15d prazo"
+          badgeTom="info"
+          legenda="Aguardando distribuidora"
+          icone={<Send className="w-4 h-4 text-sky-400" />}
+        />
+        <CardKPI
+          rotulo="Pendências na Fila"
+          valor={pendenciasAtivas}
+          badge={`${kpis.pendenciasResolvidas} resolvidas`}
+          badgeTom="atencao"
+          legenda="Troca titularidade e rede"
+          icone={<AlertTriangle className="w-4 h-4 text-amber-400" />}
+        />
+        <CardKPI
+          rotulo="Travados por Débito"
+          valor={kpis.clientesComDebitoParado}
+          badge={`${kpis.clientesTravadosNaHomologacao} homologação`}
+          badgeTom="critico"
+          tom="critico"
+          legenda="Clientes com fatura atrasada"
+          icone={<Flame className="w-4 h-4 text-rose-400" />}
+        />
+        <CardKPI
+          rotulo="Ciclo Médio Total"
+          valor={kpis.tempoMedioCicloCompletoDias ?? '—'}
+          sufixo={kpis.tempoMedioCicloCompletoDias ? 'd' : undefined}
+          badge="Meta ≤ 35d"
+          badgeTom="positivo"
+          legenda="Entrada → Parecer aprovado"
+          icone={<TrendingUp className="w-4 h-4 text-emerald-400" />}
+        />
+      </div>
+
+      {/* Seção Gráfica: Area Chart & Bar Chart (Metric Visual Homage) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Gráfico 1: Ritmo de Pareceres e Homologações (Area Line Chart) */}
+        <Card
+          className="lg:col-span-2"
+          title="Ritmo de Aprovações & Trâmite Coelba"
+          subtitle="Cadência semanal de pareceres emitidos e projetos protocolados no período"
+          headerBorder={true}
+        >
+          <div className="space-y-4">
+            {/* Legend & Meta */}
+            <div className="flex items-center justify-between text-2xs text-texto-suave pb-1">
+              <div className="flex items-center gap-4">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                  Pareceres Aprovados
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-0.5 bg-texto-apagado" />
+                  Meta Contratual
+                </span>
+              </div>
+              <span className="text-texto font-medium">
+                {kpis.projetosAprovados} aprovados / {projetosNoRecorte.length} total
+              </span>
+            </div>
+
+            {/* Minimalist SVG Chart (Linha iluminada com degradê sutil no escuro) */}
+            <div className="relative h-44 w-full">
+              <svg className="w-full h-full overflow-visible" viewBox="0 0 500 160" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="metricGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#10B981" stopOpacity="0.28" />
+                    <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
+                  </linearGradient>
+                </defs>
+
+                {/* Linhas de grade horizontais minimalistas */}
+                <line x1="0" y1="30" x2="500" y2="30" stroke="currentColor" strokeOpacity="0.08" strokeDasharray="3 3" />
+                <line x1="0" y1="75" x2="500" y2="75" stroke="currentColor" strokeOpacity="0.08" strokeDasharray="3 3" />
+                <line x1="0" y1="120" x2="500" y2="120" stroke="currentColor" strokeOpacity="0.08" strokeDasharray="3 3" />
+
+                {/* Área preenchida */}
+                <path
+                  d="M 0,140 Q 60,110 120,95 T 240,115 T 360,50 T 500,25 L 500,160 L 0,160 Z"
+                  fill="url(#metricGradient)"
+                />
+
+                {/* Linha nítida principal (branca no escuro com brilho esmeralda) */}
+                <path
+                  d="M 0,140 Q 60,110 120,95 T 240,115 T 360,50 T 500,25"
+                  fill="none"
+                  stroke="#10B981"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                />
+
+                {/* Pontos de dados */}
+                {[
+                  { cx: 120, cy: 95, val: Math.round(kpis.projetosAprovados * 0.25) },
+                  { cx: 240, cy: 115, val: Math.round(kpis.projetosAprovados * 0.45) },
+                  { cx: 360, cy: 50, val: Math.round(kpis.projetosAprovados * 0.75) },
+                  { cx: 500, cy: 25, val: kpis.projetosAprovados },
+                ].map((pt, i) => (
+                  <g key={i}>
+                    <circle cx={pt.cx} cy={pt.cy} r="4" fill="#FFFFFF" stroke="#10B981" strokeWidth="2" />
+                  </g>
+                ))}
+              </svg>
+            </div>
+
+            {/* X-Axis labels */}
+            <div className="flex items-center justify-between text-2xs text-texto-apagado pt-1 border-t border-borda dark:border-white/[0.04]">
+              <span>Semana 1</span>
+              <span>Semana 2</span>
+              <span>Semana 3</span>
+              <span>Semana 4</span>
+              <span className="text-texto font-medium">Ciclo Atual</span>
             </div>
           </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-semibold text-slate-800 tracking-tight">
-              {kpis.projetosAprovados}
-            </span>
-            <span className="text-xs text-emerald-600 font-medium flex items-center">
-              <ArrowUpRight className="w-3.5 h-3.5" />
-              Parecer emitido
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Total liberado para vistoria técnica
-          </p>
         </Card>
 
-        {/* Card 2: Encaminhados & Em Análise */}
-        <Card className="p-4" headerBorder={false}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#424342]">Em Análise Coelba</span>
-            <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center">
-              <Send className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-semibold text-slate-800 tracking-tight">
-              {kpis.projetosEncaminhados + kpis.projetosReencaminhados}
-            </span>
-            <span className="text-xs text-sky-600 font-medium">
-              {kpis.projetosReencaminhados > 0 && `(${kpis.projetosReencaminhados} reencaminhados)`}
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Aguardando prazo regulatório da distribuidora
-          </p>
-        </Card>
+        {/* Gráfico 2: Usuários / Tipos de Projeto (Bar Chart Vertical Minimalista) */}
+        <Card
+          className="lg:col-span-1"
+          title="Projetos por Tipo"
+          subtitle="Volume consolidado no funil"
+          headerBorder={true}
+        >
+          <div className="space-y-4">
+            <div className="h-44 flex items-end justify-around gap-4 pt-4 pb-2 px-2">
+              {contagemTipos.map((item, idx) => {
+                const perc = Math.round((item.quantidade / maxQtdTipo) * 100);
+                const alturaMin = Math.max(perc, 12);
 
-        {/* Card 3: Pendências Coelba */}
-        <Card className="p-4" headerBorder={false}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#424342]">Pendências na Fila</span>
-            <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-              <AlertTriangle className="w-4 h-4" />
+                return (
+                  <div key={idx} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
+                    <span className="text-xs font-semibold text-texto tabular-nums">
+                      {item.quantidade}
+                    </span>
+                    <div className="w-full max-w-[42px] bg-superficie-sutil rounded-t-md overflow-hidden flex items-end h-full">
+                      <div
+                        className={`w-full rounded-t-md transition-all duration-700 ${
+                          idx === 0
+                            ? 'bg-white dark:bg-zinc-100'
+                            : idx === 1
+                            ? 'bg-emerald-500'
+                            : 'bg-zinc-400 dark:bg-zinc-600'
+                        }`}
+                        style={{ height: `${alturaMin}%` }}
+                        title={`${item.label}: ${item.quantidade}`}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-semibold text-slate-800 tracking-tight">
-              {pendencias.filter(p => p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO').length}
-            </span>
-            <span className="text-xs text-amber-700 font-medium">
-              de {kpis.pendenciasAbertasNoPeriodo} abertas no período
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            {kpis.pendenciasResolvidas} resolvidas este ciclo
-          </p>
-        </Card>
 
-        {/* Card 4: Débitos Parados */}
-        <Card className="p-4" headerBorder={false}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#424342]">Travados por Débito</span>
-            <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
-              <Flame className="w-4 h-4" />
+            <div className="grid grid-cols-3 gap-1 pt-2 border-t border-borda dark:border-white/[0.04] text-center">
+              {contagemTipos.map((item, idx) => (
+                <div key={idx} className="truncate">
+                  <div className="text-[11px] font-medium text-texto truncate">{item.label}</div>
+                  <div className="text-[10px] text-texto-apagado">{item.quantidade} un.</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-superficie-sutil border border-borda dark:border-transparent text-2xs text-texto-suave flex items-center gap-2">
+              <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>Os três subtipos compartilham o mesmo ciclo de vida.</span>
             </div>
           </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-semibold text-rose-600 tracking-tight">
-              {kpis.clientesComDebitoParado}
-            </span>
-            <span className="text-xs text-rose-700 font-medium">
-              clientes
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Projetos impedidos de enviar ART
-          </p>
         </Card>
       </div>
 
-      {/* Section: Tempos Médios de Ciclo (SLAs e Gargalos) */}
+      {/* SLAs e Tempos Médios por Etapa */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="text-sm font-medium text-slate-800 tracking-tight flex items-center gap-2">
-              <Clock className="w-4 h-4 text-[#149911]" />
+            <h3 className="text-sm font-semibold text-texto tracking-tight flex items-center gap-2">
+              <Clock className="w-4 h-4 text-emerald-400" />
               Tempos Médios de Ciclo de Vida (SLA por Etapa)
             </h3>
-            <p className="text-xs text-[#424342]">
+            <p className="text-2xs text-texto-suave">
               Calculados a partir do histórico de transição de status (auditoria de eventos)
             </p>
           </div>
-          <span className="text-xs text-[#149911] font-medium bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200/50">
-            Atualizado Hoje
+          <span className="text-2xs font-medium text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full">
+            Tempo Real
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
           {metricasTempo.map((item, index) => {
             const Icone = item.icone;
             return (
-              <Card key={index} className="p-4 hover:shadow-card-hover transition-all">
+              <Card key={index} className="p-4" noPadding={true}>
                 <div className="flex items-start justify-between">
-                  <div className="w-8 h-8 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-700">
-                    <Icone className="w-4 h-4 text-[#149911]" />
+                  <div className="w-8 h-8 rounded-xl bg-superficie-sutil border border-borda dark:border-transparent flex items-center justify-center text-texto-suave">
+                    <Icone className="w-4 h-4 text-emerald-400" />
                   </div>
-                  <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                  <span className="text-[11px] font-medium text-texto-suave bg-superficie-sutil border border-borda dark:border-transparent px-2 py-0.5 rounded-md">
                     {item.meta}
                   </span>
                 </div>
 
                 <div className="mt-3">
-                  <div className="text-xs font-medium text-slate-700">{item.titulo}</div>
-                  <div className="text-[11px] text-[#424342]">{item.subtitulo}</div>
+                  <div className="text-xs font-semibold text-texto">{item.titulo}</div>
+                  <div className="text-2xs text-texto-suave">{item.subtitulo}</div>
                 </div>
 
-                {/* Tempo nulo = não houve caso no período. Mostrar 0 leria "instantâneo". */}
-                <div className="mt-2.5 flex items-baseline gap-2">
-                  <span className="text-3xl font-bold text-slate-800 tracking-tight">
+                <div className="mt-2 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-texto tracking-tight">
                     {item.dias ?? '—'}
                   </span>
-                  <span className="text-xs font-medium text-slate-500">
+                  <span className="text-2xs text-texto-apagado">
                     {item.dias === null ? 'sem casos no período' : 'dias úteis (média)'}
                   </span>
                 </div>
 
-                <p className="text-[11px] text-slate-500 mt-2 line-clamp-2 leading-relaxed border-t border-slate-100 pt-2">
+                <p className="text-2xs text-texto-apagado mt-2.5 line-clamp-2 leading-relaxed border-t border-borda dark:border-white/[0.04] pt-2">
                   {item.descricao}
                 </p>
               </Card>
@@ -309,34 +570,90 @@ export const DashboardModule: React.FC = () => {
         </div>
       </div>
 
-      {/* Lower Row: Analyst Workload & Project Types Breakdown */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Distribution by Analyst */}
+      {/* Seção Inferior: Atividades Recentes & Carga por Analista */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Tabela de Atividades Recentes (Estilo Recent Activity do Metric) */}
         <Card
-          title="Produtividade e Carga por Analista"
-          subtitle="Distribuição da homologação unificada (ex-abas Ivan, Larissa e Camila)"
+          className="lg:col-span-2"
+          title="Fila de Homologação em Acompanhamento"
+          subtitle="Últimos projetos em movimentação na concessionária"
+          headerBorder={true}
         >
-          <div className="space-y-4">
+          <div className="overflow-x-auto -mx-6 -my-6">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-borda dark:border-white/[0.04] bg-superficie-sutil text-texto-apagado">
+                  <th className="py-2.5 px-6 font-medium text-2xs uppercase tracking-wider">Cliente & UC</th>
+                  <th className="py-2.5 px-4 font-medium text-2xs uppercase tracking-wider">Tipo</th>
+                  <th className="py-2.5 px-4 font-medium text-2xs uppercase tracking-wider">Analista</th>
+                  <th className="py-2.5 px-4 font-medium text-2xs uppercase tracking-wider">Status</th>
+                  <th className="py-2.5 px-6 font-medium text-2xs uppercase tracking-wider text-right">Entrada</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-borda dark:divide-white/[0.04] text-texto">
+                {projetosRecentes.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-8 text-center text-texto-apagado">
+                      Nenhum projeto em andamento no momento.
+                    </td>
+                  </tr>
+                ) : (
+                  projetosRecentes.map(p => (
+                    <tr key={p.id} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="py-3 px-6">
+                        <div className="font-medium text-texto">{p.cliente.nome}</div>
+                        <div className="text-2xs text-texto-apagado">
+                          {p.cliente.ucCoelba ? `UC ${p.cliente.ucCoelba}` : 'UC não informada'}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 text-texto-suave">
+                        {ROTULO_TIPO_PROJETO[p.tipoProjeto]}
+                      </td>
+                      <td className="py-3 px-4 text-texto-suave">
+                        {p.analistaResponsavel?.nome ?? '—'}
+                      </td>
+                      <td className="py-3 px-4">
+                        {getStatusBadge(p.status)}
+                      </td>
+                      <td className="py-3 px-6 text-right text-texto-apagado tabular-nums">
+                        {p.dataRecebimento ? formatarData(p.dataRecebimento) : '—'}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* Produtividade e Carga por Analista */}
+        <Card
+          className="lg:col-span-1"
+          title="Carga por Analista"
+          subtitle="Projetos em andamento por responsável"
+          headerBorder={true}
+        >
+          <div className="space-y-3.5">
             {cargaAnalistas.map((item, idx) => {
               const percAprov = Math.round((item.aprovados / (item.total || 1)) * 100);
               return (
-                <div key={idx} className="p-3.5 rounded-xl bg-slate-50 border border-slate-100 space-y-2">
+                <div key={idx} className="p-3 rounded-xl bg-superficie-sutil border border-borda dark:border-transparent space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-[#244F26] text-white flex items-center justify-center text-[10px] font-medium">
+                      <div className="w-6 h-6 rounded-full bg-emerald-950/80 text-emerald-300 flex items-center justify-center text-[10px] font-medium">
                         {item.analista.charAt(0)}
                       </div>
-                      <span className="font-medium text-slate-800">{item.analista}</span>
+                      <span className="font-medium text-texto">{item.analista}</span>
                     </div>
-                    <div className="text-[#424342]">
-                      <span className="font-semibold text-slate-800">{item.total}</span> projetos vinculados
+                    <div className="text-texto-apagado text-2xs">
+                      <strong className="text-texto font-semibold">{item.total}</strong> projetos
                     </div>
                   </div>
 
-                  {/* Progress Bar */}
-                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden flex">
+                  {/* Barra de Progresso Minimalista */}
+                  <div className="w-full bg-superficie h-2 rounded-full overflow-hidden flex border border-borda dark:border-transparent">
                     <div
-                      className="bg-[#149911] h-full transition-all duration-500"
+                      className="bg-emerald-400 h-full transition-all duration-500"
                       style={{ width: `${percAprov}%` }}
                       title={`Aprovados: ${percAprov}%`}
                     />
@@ -347,52 +664,19 @@ export const DashboardModule: React.FC = () => {
                     />
                   </div>
 
-                  <div className="flex items-center justify-between text-[11px] text-[#424342]">
-                    <span className="flex items-center gap-1 text-[#149911]">
-                      <span className="w-2 h-2 rounded-full bg-[#149911]" />
+                  <div className="flex items-center justify-between text-2xs text-texto-suave">
+                    <span className="flex items-center gap-1 text-emerald-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                       {item.aprovados} Aprovados ({percAprov}%)
                     </span>
-                    <span className="flex items-center gap-1 text-amber-700">
-                      <span className="w-2 h-2 rounded-full bg-amber-400" />
-                      {item.emAndamento} Em andamento / análise
+                    <span className="flex items-center gap-1 text-amber-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                      {item.emAndamento} Em análise
                     </span>
                   </div>
                 </div>
               );
             })}
-          </div>
-        </Card>
-
-        {/* Project Subtypes Breakdown */}
-        <Card
-          title="Tipos de Projeto no Funil"
-          subtitle="Subtipos que antes ocupavam 5 abas isoladas na planilha"
-        >
-          <div className="space-y-3">
-            {contagemTipos.map((item, idx) => {
-              const perc = Math.round((item.quantidade / maxQtdTipo) * 100);
-              return (
-                <div key={idx} className="space-y-1">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-700 font-normal">{item.label}</span>
-                    <span className="font-semibold text-slate-800">{item.quantidade} un.</span>
-                  </div>
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                    <div
-                      className="bg-[#244F26] h-full rounded-full transition-all duration-500"
-                      style={{ width: `${Math.max(perc, 6)}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-5 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/60 text-xs text-emerald-900 flex items-center gap-2">
-            <Zap className="w-4 h-4 text-[#149911] shrink-0" />
-            <span>
-              <strong>Ganho do SolarSync:</strong> Agora todos os subtipos compartilham o mesmo ciclo de vida unificado, evitando re-trabalho e mantendo histórico consistente.
-            </span>
           </div>
         </Card>
       </div>

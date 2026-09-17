@@ -10,7 +10,6 @@ interface AuthContextType {
   carregando: boolean;
   erroLogin: string | null;
   entrar: (email: string, senha: string) => Promise<void>;
-  entrarComGoogle: (idToken: string) => Promise<void>;
   sair: () => void;
   temPapel: (...papeis: Papel[]) => boolean;
 }
@@ -86,25 +85,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const entrarComGoogle = async (idToken: string) => {
-    setErroLogin(null);
-    try {
-      aplicarLogin(await authApi.loginGoogle(idToken));
-    } catch (erro) {
-      setErroLogin(
-        erro instanceof ApiError ? erro.mensagemAmigavel : 'Não foi possível entrar',
-      );
-      throw erro;
-    }
-  };
-
   const papel = papelPrincipal(usuario);
   const temPapel = (...papeis: Papel[]) =>
     !!usuario && papeis.some((p) => usuario.papeis.includes(p));
 
   return (
     <AuthContext.Provider
-      value={{ usuario, papel, carregando, erroLogin, entrar, entrarComGoogle, sair, temPapel }}
+      value={{ usuario, papel, carregando, erroLogin, entrar, sair, temPapel }}
     >
       {children}
     </AuthContext.Provider>
