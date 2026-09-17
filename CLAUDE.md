@@ -1,182 +1,304 @@
-# SolarSync — CLAUDE.md
+# SolarSync — frontend (`solarsync-front`)
 
-Documento de referência do projeto para orientar o desenvolvimento assistido por IA.
-Manter atualizado a cada decisão relevante — este arquivo é a fonte de verdade do escopo.
+Interface do SolarSync, o sistema que substitui a planilha de 18 abas com que a ConectSol
+controla a homologação de projetos solares na Coelba.
 
-## 1. Contexto
+**Este documento cobre o frontend.** O contexto de negócio, o modelo de domínio e as regras do
+fluxo vivem no `CLAUDE.md` do repositório do backend (`solarsync`) — a fonte de verdade é lá, e
+duplicá-la aqui só criaria duas versões divergentes (foi o que aconteceu com a cópia anterior
+deste arquivo).
 
-A ConectSol controla hoje todo o processo de homologação de projetos solares (Coelba/Neoenergia)
-por uma planilha Excel com 18 abas, uma por responsável ou subtipo de projeto. O objetivo do
-SolarSync é substituir essa planilha por um sistema web com:
+## Stack
 
-- API REST em Java/Spring Boot
-- Banco PostgreSQL
-- Frontend consumindo a API (design system: estilo Navan, paleta verde — ver seção 7)
-- Autenticação e autorização por hierarquia (RBAC)
-- Dashboard gerencial com métricas de tempo de ciclo, restrito ao gestor
+React 18 + TypeScript + Vite + Tailwind. Ícones: `lucide-react`. Sem router: a navegação entre
+módulos é estado no `AppContext`, o que basta para uma aplicação de oito telas atrás de login.
+Sem biblioteca de data fetching: o volume é de dezenas a centenas de linhas por tela, e um
+cliente HTTP próprio evita uma dependência que ninguém pediu.
 
-O fluxo de negócio mapeado (a partir do processo real da ConectSol) tem 4 macro-etapas:
+## Como rodar
 
-1. **Entrada e pendências** — cliente validado pelo financeiro entra no fluxo; verifica-se
-   pendência na Coelba (troca de titularidade, ligação nova, extensão de rede, etc.). Sem
-   pendência, segue direto. Com pendência, resolve-se na Coelba e atualiza-se manualmente em
-   dois lugares (planilha + Trello) — **ponto de retrabalho identificado**.
-2. **Débito e homologação** — verifica-se débito pendente do cliente (agência virtual Coelba).
-   Com débito, cliente é cobrado até quitar. Sem débito, o projeto é preenchido e enviado à
-   Coelba com ART.
-3. **Acompanhamento** — status acompanhado por e-mail diário (aprovado / reprovado / em
-   análise). Reprovado volta para correção e reenvio. Aprovado segue para vistoria.
-4. **Vistoria e unificação** — vistoria solicitada pós-instalação; se aprovada, segue para
-   pós-venda; se há unificação pendente, valida-se e desliga-se o medidor ou abre-se O.S.
+```bash
+npm install
+npm run dev      # http://localhost:5173
+```
 
-## 2. Análise da planilha atual (`PLANILHA_TESTE_-_PROJETOS_.xlsx`)
+O backend precisa estar no ar em `http://localhost:8080` (veja o README/CLAUDE.md dele). Para
+apontar para outro endereço, crie um `.env` a partir do `.env.example`.
 
-18 abas, agrupáveis em 6 papéis funcionais:
+Usuário inicial em desenvolvimento: `joaogabriel@conectsol.com`, senha definida na configuração
+local do backend.
 
-| Abas de origem | Papel no processo | Observação |
-|---|---|---|
-| `PARAFAZER`, `PENDENCIASNYCOLLE`, `PENDENCIASOLICITACOES` | Fila de pendências (etapa 1) | Colunas: vendedor, data pagamento, cliente, pego, pendência, solicitado, status, conclusão |
-| `IVAN`, `LARISSA`, `CAMILA` | Homologação de projeto (etapas 2–3) | Mesma estrutura em 3 abas duplicadas por analista: débito, data ART, data feito, data encaminhado, data reprova+motivo, data reencaminhado, data aprovação, dias para aprovação |
-| `AUMENTO DE POTENCIA`, `AMPLIAÇOES`, `PROJETO COM UMA PLACA A MAIS`, `MUDANÇA DE INVERSOR 5KW`, `INVERSORES SEPARADOS` | Subtipos de projeto | Mesmo ciclo de vida do projeto — devem virar um campo `tipo_projeto`, não abas/tabelas separadas |
-| `IGOR`, `UNIFICAÇÕES` | Unificação (etapa 4) | Cliente, cidade, projetista, info da unificação, feita?, desligamento |
-| `DESLIGAMENTOS E ETC` | Desligamento de medidor (etapa 4) | Cliente, pego, status |
-| `CLIENTES_DEBITOS` | Cache de status de débito | Cliente, status, última consulta |
-| `CATS` | Protocolo/documento vinculado | Cliente, número, status |
-| `Página12`, `Página20` | Lixo — confirmado, não migrar | — |
+## Como conversa com a API
 
-**Conclusão-chave**: a planilha é organizada por *responsável*, não por *etapa*. Isso duplica
-trabalho (3 abas idênticas para Ivan/Larissa/Camila) e impede visão consolidada — exatamente o
-que o dashboard do gestor precisa resolver.
+O contrato é o `docs/api/openapi.json` do repositório do backend, também navegável em
+`http://localhost:8080/swagger-ui.html` com o backend rodando. Ao mexer em qualquer coisa de
+dados, confira o contrato em vez de deduzir pelo nome do campo.
 
-## 3. Modelo de domínio proposto
+- `src/api/client.ts` — fetch com token, **renovação automática** do access token (que dura 15
+  min) e erros da API convertidos em `ApiError` com `codigo` legível por máquina.
+- `src/api/recursos.ts` — uma função por endpoint, tipada. Nenhum componente monta URL na mão.
+- `src/context/AuthContext.tsx` — login, usuário atual, papel e logout.
+- `src/context/AppContext.tsx` — carrega as listas e expõe as mutações.
 
-Entidades centrais (nomes provisórios, ajustar durante desenvolvimento):
+### Convenções que vêm do contrato
 
-- **Cliente** — nome, cidade, vendedor, data_pagamento
-- **Pendencia** — cliente_id, tipo, status, solicitado_em, resolvido_em, responsavel_id, observação
-- **Debito** — cliente_id, status (ativo/quitado), última_consulta_em
-- **Projeto** — cliente_id, tipo_projeto (padrão/ampliação/aumento_potência/mudança_inversor/...),
-  analista_responsavel_id, data_recebimento, data_art, data_encaminhado, status
-  (encaminhado/aprovado/reprovado/reencaminhado), motivo_reprova, data_aprovacao
-- **Vistoria** — projeto_id, data_solicitacao, status (aprovada/reprovada), data_resultado
-- **Unificacao** — cliente_id, cidade, projetista_id, informações, feita (bool), desligamento (bool)
-- **Usuario** / **Papel** / **Permissao** — RBAC (ver seção 4)
-- **HistoricoStatus** — tabela de auditoria (entidade_tipo, entidade_id, status_anterior,
-  status_novo, timestamp, usuario_id) — **necessária para calcular todas as métricas do
-  dashboard**, já que a planilha guarda só a data de cada evento pontual, não um histórico
-  genérico
+- `id` é `number`; campos em `camelCase`; datas são strings ISO (`YYYY-MM-DD` ou ISO-8601).
+- Enums são chaves técnicas (`AGUARDANDO_ENVIO`). O texto que o usuário lê sai dos mapas
+  `ROTULO_*` em `src/types/index.ts` — nunca exiba o enum cru.
+- **Mudança de status é endpoint de ação** (`resolverPendencia`, `encaminharProjeto`), nunca um
+  PUT com campo `status`. É o que garante a automação entre etapas e a auditoria no servidor.
+- **Tempo médio `null` no dashboard não é zero**: significa "não houve caso no período". Mostrar
+  `0` faria o gestor ler "instantâneo" onde não há dado. Exiba `—`.
+- Listagens devolvem o cliente achatado (`clienteId` + `clienteNome`); o `AppContext` recompõe a
+  forma aninhada juntando com a lista de clientes que já carrega, para as telas terem cidade,
+  vendedor e UC sem uma requisição por linha.
+- ⚠️ **Listagem e detalhe são DTOs diferentes no backend** (`ProjetoResumoResponse` vs
+  `ProjetoResponse`, e o mesmo em Pendência). Campo novo que a *tabela* mostra precisa entrar nos
+  dois: só no detalhe, a coluna renderiza vazia sem erro nenhum — foi o que aconteceu com o
+  `numeroSolicitacao`.
 
-**Integração entre abas/etapas** (requisito do usuário): a mudança de status de uma entidade
-deve dispara o avanço automático para a próxima. Ex.: `Pendencia.status = RESOLVIDA` cria/ativa
-automaticamente o registro correspondente em `Projeto` com status inicial. Implementar via
-evento de domínio (Spring `ApplicationEventPublisher` ou tabela de outbox) — não hardcoded em
-controller.
+### Erros e feedback
 
-## 4. RBAC
+O `AppContext` já mostra toast de sucesso e, no erro, a mensagem que a API devolveu — inclusive
+as regras de negócio, que chegam como 409 com texto pronto:
 
-Hierarquia confirmada (implementação de permissões fica para depois — por ora só a estrutura
-de papéis):
-
-| Papel | Quem | Acesso |
-|---|---|---|
-| `ADMINISTRADOR` | João Gabriel | Acesso total ao sistema |
-| `GESTOR` | Igor | Acesso total operacional + dashboard exclusivo |
-| `ANALISTA` | Ivan, Larissa, Camila, Nycole e demais | Papel único — CRUD nas etapas do fluxo (pendência, débito, projeto, vistoria, unificação), sem distinção por especialidade dentro do sistema |
-
-Implementação futura: Spring Security + JWT, `@PreAuthorize` por método, tabela
-`papel`/`permissao` muitos-para-muitos com `usuario`. Não é prioridade da primeira fase.
-
-## 5. Dashboard (exclusivo `GESTOR`)
-
-Todas as métricas abaixo dependem de `HistoricoStatus` com timestamps confiáveis:
-
-| Métrica | Cálculo (baseado no histórico) |
+| `codigo` | Significa |
 |---|---|
-| Tempo médio sem ninguém mexer no cliente | `primeira_interação_ts - data_pagamento` |
-| Tempo médio de resolução de pendência | `resolvido_em - solicitado_em` (Pendencia) |
-| Tempo médio recebimento → envio do projeto | `data_encaminhado - data_recebimento` (Projeto) |
-| Tempo médio para aprovação | `data_aprovacao - data_encaminhado` (última vez encaminhado) |
-| Tempo médio parado por débito | `debito_quitado_em - debito_detectado_em` |
-| Tempo médio para solicitar vistoria pós-instalação | `data_solicitacao_vistoria - data_instalado` |
-| Tempo médio de ciclo completo | `data_aprovacao_vistoria - data_recebimento_projeto` |
-| Quantitativo: pendências resolvidas | `COUNT(Pendencia WHERE status = RESOLVIDA)` |
-| Quantitativo: projetos aprovados | `COUNT(Projeto WHERE status = APROVADO)` |
-| Quantitativo: clientes com débito parado | `COUNT(Debito WHERE status = ATIVO)` |
-| Quantitativo: projetos encaminhados | `COUNT(Projeto WHERE status = ENCAMINHADO)` |
-| Quantitativo: projetos reprovados | `COUNT(Projeto WHERE status = REPROVADO)` |
-| Quantitativo: vistorias solicitadas | `COUNT(Vistoria)` |
+| `CLIENTE_COM_DEBITO` | o cliente deve na etapa em questão; pede cobrança |
+| `DEBITO_NAO_CONSULTADO` | ninguém consultou a agência virtual para aquela etapa; pede consulta |
+| `PROJETO_SEM_INSTALACAO` | vistoria exige a data de instalação registrada antes |
+| `TRANSICAO_INVALIDA` | o status atual não permite aquela mudança |
+| `ACESSO_NEGADO` | o papel do usuário não permite a ação |
+| `UNIFICACAO_NAO_FEITA` | o desligamento só é pedido depois de confirmada a unificação |
 
-## 6. Arquitetura técnica
+Os dois primeiros são recusas **diferentes** de propósito, e as telas antecipam qual será
+(`bloqueioDaResolucao` em Pendências, `bloqueioDoEnvio` em Projetos) em vez de deixar o analista
+descobrir clicando. Juntá-los mandaria cobrar um cliente que talvez não deva nada.
 
-- **Backend**: Java 21, Spring Boot 3.x (Web, Security, Data JPA, Validation), Maven
-- **Banco**: PostgreSQL, migrações com Flyway
-- **Auth**: JWT (access + refresh token), RBAC via `@PreAuthorize`
-- **Frontend**: estilo Navan em paleta verde (ver seção 7) — deve consumir a API via REST/JSON
-- **Infra local**: Docker Compose (API + Postgres), alinhado ao ambiente já usado no VPS Contabo
-- **Estrutura de pacotes sugerida**:
-  ```
-  com.conectsol.solarsync
-  ├── cliente
-  ├── pendencia
-  ├── debito
-  ├── projeto
-  ├── vistoria
-  ├── unificacao
-  ├── auth (usuario, papel, permissao, jwt)
-  ├── historico (auditoria de status)
-  ├── dashboard
-  └── common (config, exceptions, eventos de domínio)
-  ```
+⚠️ **Invariante do débito: um débito trava uma etapa só** — ou a resolução da pendência, ou a
+homologação do projeto, nunca as duas (reforçado pelo usuário em 16/09/2026). Na prática, isso
+quer dizer que **toda leitura de `debitos` filtra por `tipo` antes de decidir qualquer coisa**:
+`bloqueioDaResolucao` só olha `PENDENCIA`, `bloqueioDoEnvio` só olha `HOMOLOGACAO`, e
+`ClientesModule` indexa por `clienteId|tipo`. Um `debitos.find(d => d.cliente.id === id)` sem
+filtro de tipo reintroduz em silêncio o modelo antigo, em que uma linha só travava as duas
+etapas. O badge da sidebar é a exceção que confirma a regra: conta **clientes distintos**
+travados, porque ali a pergunta é "quantas pessoas estão paradas", não "por qual etapa".
 
-## 7. Design system
+⚠️ **A tela de Débitos lista só a etapa em que o cliente está agora** (pedido do usuário em
+17/09/2026). O `DebitosModule` sintetiza as linhas a partir de `clientes × TIPOS_DEBITO`, então
+antes todo cliente nascia com **duas** linhas — e o financeiro via o dobro do trabalho que
+existia: consulta de homologação cobrada de quem ainda está resolvendo pendência, e consulta de
+pendência cobrada de quem nunca teve pendência. Quem responde "que etapa é essa" é a função
+`etapasEmAberto`, que lê o próprio fluxo:
 
-Referência: estilo Navan (SaaS enterprise), adaptado para paleta verde a pedido do usuário.
+| Tipo | Aparece quando |
+|---|---|
+| `PENDENCIA` | há pendência `ABERTA`/`EM_ANDAMENTO` do cliente |
+| `HOMOLOGACAO` | há projeto do cliente ainda não `APROVADO` |
+| qualquer | o débito daquele tipo está `ATIVO` |
 
-- **Cor primária**: `#149911` (botões, links, estados ativos) — hover/escuro `#256D1B`
-- **Sidebar/header escuro**: `#244F26`
-- **Neutro de apoio** (texto secundário, bordas): `#424342`
-- **Destaque pontual** (badge "novo", indicador ativo — nunca fundo de botão ou texto): `#1EFC1E`
-- **Neutros**: branco para cards e superfícies de conteúdo, cinza claro para o fundo da página,
-  quase-preto (`#13151A`-like, no estilo Navan) reservado para sidebar/header ou modo escuro
-- **Tipografia**: sans-serif limpa (Inter ou equivalente), pesos 400/500 apenas, tamanhos
-  moderados — nada de exagero decorativo
-- **Layout**: sidebar de navegação fixa + topbar, conteúdo em cards com `border-radius` generoso
-  (12-16px), tabelas com divisores sutis (sem bordas pesadas), badges em formato pílula para
-  status (ex.: pendente / resolvido / aprovado / reprovado) coloridos por semântica dentro da
-  escala verde + neutros
-- **Componentes-chave que o SolarSync precisa**: sidebar com os módulos (Pendências, Débitos,
-  Projetos, Vistoria, Unificação, Dashboard), tabela de listagem com filtro e paginação, cards de
-  métricas (KPI) no dashboard, badges de status, formulário de detalhe/edição por entidade
+A última linha é a que não pode sair: **débito ativo aparece sempre**, mesmo fora da etapa —
+filtrar serve para calar linha sem trabalho, nunca para esconder cliente travado. O detalhe do
+cliente (o olho na linha) continua saindo do universo completo, porque é lá que a etapa já
+vencida ainda interessa. Cliente em `AGUARDANDO_VERIFICACAO` não gera linha nenhuma: antes da
+triagem não se sabe se haverá pendência, e cobrar a consulta ali é inventar trabalho.
 
-Pendente: gerar escala completa (50-900) a partir de `#149911` no uicolors.app quando for
-implementar o CSS/tema.
+Componentes **não** devem mostrar toast próprio depois de uma mutação: duplicaria a mensagem.
 
-## 8. Checklist de produção (baseado no guia dos 12 itens)
+## Clientes é a entrada, não mais um módulo do fluxo
 
-Adaptação dos 12 itens do guia Mestre-Code para o contexto do SolarSync — sistema interno de
-uma única empresa (ConectSol), não SaaS multi-cliente. Isso muda a prioridade de alguns itens.
+`ClientesModule` abre os módulos do fluxo de propósito: todo outro módulo pede um `clienteId`
+num seletor, então **sem esta tela a interface só funcionava com os dados de exemplo do
+backend** — não havia como cadastrar o primeiro cliente (era o estado até 04/09/2026).
 
-| # | Item | Aplica? | Nota para o SolarSync |
-|---|---|---|---|
-| 1 | PRD | **Sim** | Este próprio CLAUDE.md cumpre esse papel — manter atualizado a cada decisão |
-| 2 | Mapa do sistema (UML) | **Sim** | Falta gerar: diagrama de classes das entidades da seção 3 e diagrama de sequência do fluxo de status (pendência → projeto → vistoria) |
-| 3 | RBAC (matriz completa) | **Sim, expandir** | Seção 4 define os papéis, mas falta matriz explícita ação × papel (ex.: quem pode editar débito, quem pode ver dashboard) antes de implementar |
-| 4 | Multi-tenancy | **Não se aplica** | Sistema é de uma empresa só (ConectSol), não atende múltiplos clientes-empresa na mesma base. Não criar isolamento por tenant |
-| 5 | RLS no banco | **Opcional, defesa extra** | Sem multi-tenancy o risco principal muda: RLS aqui serviria só se quiser reforçar "analista só vê clientes atribuídos a si" dentro do próprio Postgres, além do controle no Spring Security. Não é bloqueante, mas vale considerar para o dashboard financeiro (débitos) |
-| 6 | Nenhuma senha no código | **Sim, obrigatório** | `.env` fora do Git, credenciais do Postgres e JWT secret como variável de ambiente no VPS Contabo, nunca commitadas |
-| 7 | Arquitetura modular (liga/desliga por cliente) | **Não se aplica como catálogo comercial** | Não há "clientes-empresa" comprando módulos. Mas a separação em pacotes por etapa (seção 6) já cumpre o espírito de baixo acoplamento entre módulos |
-| 8 | Botão de reportar problema | **Sim, recomendado** | Útil dado que analistas vão operar o sistema diariamente — botão de feedback com captura de tela/contexto ajuda a substituir o "manda áudio de 3 minutos" |
-| 9 | Testes automáticos | **Sim, obrigatório** | Crítico especificamente para a regra de integração entre etapas (seção 3: pendência resolvida → cria projeto automaticamente) e para o cálculo das métricas do dashboard — são os dois pontos onde um bug silencioso derruba a confiança do gestor no sistema |
-| 10 | Auditoria de segurança | **Sim, antes de ir ao ar** | Sistema guarda dado de cliente final (nome, débito, projeto) — mesmo sendo uso interno, uma auditoria básica (dependências desatualizadas, endpoints sem autenticação, RBAC sem furo) antes do deploy no VPS Contabo é razoável |
-| 11 | WAF / rate limiting | **Sim** | VPS Contabo expõe a aplicação à internet — recomentélo Cloudflare (gratuito) na frente, rate limit no endpoint de login |
-| 12 | HTTPS/TLS | **Sim, obrigatório** | Certificado (Let's Encrypt) + redirecionamento forçado HTTPS no domínio usado no VPS Contabo |
+- O mesmo modal serve criar e editar. O `PUT /api/clientes/{id}` **substitui o cadastro
+  inteiro** (`ClienteService.atualizar` seta todos os campos), então o formulário parte de
+  todos os valores atuais do cliente e envia todos de volta — mandar só o campo alterado
+  apagaria o resto.
+- Campo vazio vira `null`, não `""`: string vazia gravaria "sem cidade" como um valor.
+- Não há botão de excluir. `DELETE /api/clientes/{id}` existe e é só de ADMIN, mas apagar
+  cliente deixa histórico órfão (ver "Buracos conhecidos" no CLAUDE.md do backend) — o caminho
+  normal é corrigir o cadastro.
+- Os três filtros não são enfeite: **sem UC** não se acha o cliente na agência virtual da
+  Coelba, **sem data de pagamento** o cliente não entra na métrica "tempo médio sem ninguém
+  mexer", e **sem movimento** é o cliente cadastrado e esquecido — a dor que a planilha
+  esconde.
+- **Triagem direta na tabela**: quando o cliente está em "Falta checar" (`AGUARDANDO_VERIFICACAO`),
+  a analista tem dois botões diretos: **sem pendência** (cria o projeto e segue para consulta de débito)
+  ou **apontar pendência** (abre modal para escolher o tipo — Troca de Titularidade, Ligação Nova, etc. —,
+  criando a pendência e marcando o cliente como `COM_PENDENCIA` automaticamente, sem precisar navegar
+  ao módulo de Pendências e reinserir os dados manualmente).
 
-**Resumo prático**: dos 12, os itens 4 e 7 não se aplicam no sentido original (são pensados pra
-SaaS multi-cliente); o 5 é opcional; os outros 9 valem para o SolarSync.
+## RBAC na interface
 
-## 9. Próximos passos
+O papel vem do login (`useAuth().papel`). **Todos os papéis veem todos os módulos do fluxo, o
+Dashboard incluído** (decisão do usuário em 09/09/2026), e o `AppContext` pede as métricas
+sempre. Excluir registro é restrito a ADMINISTRADOR; o caminho normal para registro errado é
+cancelar por status, que preserva o histórico.
 
-1. Fechar modelo de dados (DDL inicial + Flyway migration V1)
-2. Definir contratos REST (OpenAPI) para cada módulo
-3. Prototipar dashboard com dados mockados até planilha ser migrada
-4. Escrever script de importação da planilha atual para o banco novo
+**A exceção é o módulo Usuários & Acesso**, visível só para ADMINISTRADOR e GESTOR: a API
+responde 403 para ANALISTA em tudo que a tela faz, e mostrá-la a ele seria oferecer uma porta
+que não abre. A sidebar o separa numa seção "Administração", fora dos módulos do fluxo. A tela
+não é a proteção — é a conveniência; a proteção é o `@GerenciaUsuarios` do backend.
+
+O que ainda varia por papel é só a **tela de entrada**: gestor e admin abrem no dashboard,
+analista na fila de pendências, que é o trabalho dele. Isso é preferência de aterrissagem, não
+permissão — o analista chega ao dashboard pela sidebar como em qualquer outro módulo.
+
+### Login e cadastro
+
+Só e-mail e senha. **O login com Google saiu em 16/09/2026** junto com o endpoint no backend, e
+com ele o `entrarComGoogle` do `AuthContext`. Não há botão de criar conta, e é de propósito: a
+única porta de entrada de gente é a tela de Usuários. Um "criar conta" na tela de login
+convidaria a um auto-cadastro que a API recusa.
+
+A senha é obrigatória no cadastro (antes era opcional, porque quem não tinha senha entrava pelo
+Google). Contas antigas sem senha aparecem na tela com o aviso de que não conseguem entrar.
+
+### Usuários & Acesso (`UsuariosModule`)
+
+- **A lista vive no módulo, não no `AppContext`.** O contexto carrega o que todas as telas usam,
+  e o ANALISTA tomaria 403 nesta rota logo no login, derrubando o carregamento inteiro.
+- **Não há botão de excluir.** `DELETE /api/usuarios/{id}` falha com 409 assim que a pessoa
+  aparece no `historico_status`, e apagar quem já trabalhou destruiria a auditoria do dashboard.
+  Cortar acesso é **desativar**.
+- O botão de desativar fica travado na própria linha de quem está logado — a API também recusa,
+  mas oferecer o clique só produziria um administrador trancado do lado de fora.
+- Um GESTOR não vê a opção ADMINISTRADOR nem consegue editar um administrador. É espelho da
+  guarda do backend, não substituto dela.
+- Depois de cada mutação, o módulo chama `recarregar()` do contexto: os seletores de responsável
+  das outras telas saem deste mesmo cadastro e ficariam desatualizados até o próximo F5.
+
+## Pendências: a observação é editável sempre
+
+O modal de detalhe traz a observação num `textarea` com botão de salvar, **em qualquer status**,
+inclusive pendência resolvida ou cancelada (pedido do usuário em 16/09/2026). A observação é o
+parecer do que aconteceu na Coelba, e é depois de fechar que costuma aparecer o detalhe que
+faltava — travá-la ali fazia o registro parar de contar a história justamente quando ela fica
+completa.
+
+⚠️ O `PUT /api/pendencias/{id}` **substitui o registro**, então o salvamento manda `tipo` e
+`responsavelId` com os valores atuais junto da observação; mandar só o texto apagaria os dois.
+Status não está no PUT de propósito, então editar aqui nunca mexe no fluxo.
+
+A listagem não traz a observação (é o DTO de resumo), por isso o modal busca o detalhe sob
+demanda e o campo fica desabilitado até ele chegar.
+
+## Design system
+
+Paleta verde da ConectSol, com a **densidade e o baixo contorno** de um painel de dados
+(referência visual do appconty, trazida pelo usuário em 09/09/2026): a hierarquia vem da borda de
+1px e do tamanho do número, não de sombra e cor de fundo.
+
+**Duas famílias de cor, em `tailwind.config.js`:**
+
+- `solar.*` — a **marca**. Escala 50–950 derivada de `#149911`; primária `#149911`, hover
+  `#256D1B`, sidebar `#244F26`, destaque `#1EFC1E` **apenas** para indicador ativo e badge
+  "novo", nunca fundo de botão ou texto. Fixa nos dois temas.
+- `fundo` / `superficie` / `borda` / `texto` — a **interface**. Apontam para variáveis CSS
+  definidas em `src/index.css`, que trocam de valor no `.dark`.
+
+⚠️ **Escreva `bg-superficie`, não `bg-white`; `text-texto-suave`, não `text-[#424342]`.** O modo
+escuro era um bloco de ~165 linhas de `html.dark .bg-\[\#F4F6F8\] { … !important }` casando com o
+texto literal da classe: funcionava por coincidência de string, e renomear uma classe apagava o
+tema sem erro nenhum. O bloco ainda existe no fim do `index.css` como camada de compatibilidade
+para os módulos não migrados, agora alimentado pelas variáveis — a meta é ele chegar a zero.
+
+**Primitivos em `src/components/ui/`** — use-os em vez de recopiar classes. Cada um substitui uma
+string que estava duplicada em seis módulos (a paginação estava idêntica nos seis, e o botão
+primário já tinha divergido entre telas):
+
+`Botao`, `Entrada`/`Selecao`/`AreaDeTexto`/`Campo`, `Tabela` (+`Cabecalho`/`Th`/`Corpo`/`Linha`/
+`Td`/`LinhaVazia`/`Ordenavel`), `Paginacao` (com `ITENS_POR_PAGINA`), `CardKPI`,
+`AbasSegmentadas`, `BadgeTempo`. Mais `cn()` em `src/utils/cn.ts` (clsx + tailwind-merge).
+
+**Forma:** cards com borda de 1px e **sem sombra** (raio 14px); KPI = rótulo 11px apagado + número
+28px; tabelas densas com cabeçalho apagado, sem zebra; abas segmentadas para recortes da mesma
+lista; Inter 400/500.
+
+**Modo escuro** (`ThemeContext.tsx`): persistido em `localStorage` (`solarsync_tema`), detecta a
+preferência do sistema, alternância no Header e no Login.
+
+## Ordenação das listagens
+
+`src/hooks/useOrdenacao.ts` + o `Ordenavel` de `ui/Tabela` dão ordenação crescente/decrescente
+por coluna em todas as listagens. Cada módulo declara um mapa `VALORES_ORDENAVEIS` (coluna →
+como extrair o valor da linha) e uma ordem de abertura, que é a **fila de trabalho** daquela
+tela, não a primeira coluna da tabela: Débitos abre pelos mais urgentes, Pendências pela mais
+antiga por resolver, Clientes por "falta checar".
+
+Três decisões que a implementação carrega:
+
+- **É no cliente.** O `AppContext` já traz as listas inteiras (dezenas a centenas de linhas), e
+  ordenar aqui é instantâneo em vez de uma ida ao servidor por clique. Se o volume crescer a
+  ponto de paginar no servidor, é este hook que passa a mandar `sort` na requisição.
+- **Status ordena pela ordem do fluxo, não pelo alfabeto** — daí os mapas `PESO_STATUS` nos
+  módulos. `APROVADO` antes de `RECEBIDO` numa coluna de status não diria nada a ninguém.
+- **Linha vazia vai para o fim nas duas direções.** Inverter a ordem não deveria encher o topo
+  da tela de "—"; quem procura o que está faltando usa o filtro.
+
+⚠️ Texto compara com `localeCompare('pt-BR')`, nunca com `<`: sem isso "Ângela" cai depois de
+"Zilda". Data ISO ordena certo **como texto** — não converta para `Date`, é a mesma armadilha
+descrita abaixo.
+
+O rótulo clicável é `whitespace-nowrap`: com o texto quebrando em duas linhas, a seta ia parar
+ao lado do bloco inteiro e parecia solta no meio do cabeçalho. Rótulo de coluna é curto, e a
+tabela tem largura — se algum precisar de duas linhas, encurte o rótulo em vez de deixar quebrar.
+
+## Datas
+
+`src/utils/data.ts` é o único lugar que formata data para o usuário: `formatarData`
+(`DD/MM/AAAA`), `formatarDataHora` (`DD/MM/AAAA HH:mm`, horário de Brasília), `diasDesde` e
+`textoDiasParado`. Antes cada tela renderizava a string ISO crua.
+
+⚠️ **Data pura (`2026-08-20`) não pode passar por `new Date()`**: o construtor a lê como meia-noite
+UTC, que em `America/Sao_Paulo` vira **19/08**. `formatarData` quebra a string em vez de construir
+um `Date`; só os instantes, que carregam fuso, passam pelo `Intl`.
+
+## Dashboard: os filtros
+
+As pílulas de período **eram enfeite** até 16/09/2026 — mudavam o estado local e o painel
+continuava mostrando o histórico inteiro. Agora elas escrevem em `periodoDashboard` do
+`AppContext`, que é o que vai para a API, e há duas adições pedidas pelo usuário:
+
+- **Período personalizado**: dois `<input type="date">` que aparecem só no modo
+  `PERSONALIZADO`, para não competir com os atalhos. Ponta vazia é "sem limite daquele lado" —
+  dá para pedir "tudo até 31/08" sem inventar uma data inicial.
+- **Filtro por analista**: a API recorta cada métrica pelo responsável da sua etapa e devolve
+  `filtro.analistaNome`, que a tela usa no subtítulo. O rótulo importa: "3 projetos aprovados"
+  diz coisas bem diferentes com e sem filtro de pessoa.
+
+⚠️ Os atalhos calculam datas com `hojeISO()`/`somarDiasISO()` de `utils/data.ts`, **não** com
+`new Date().toISOString().split('T')[0]`: depois das 21h em Brasília o `toISOString` já está no
+dia seguinte em UTC, e o filtro "hoje" traria o dia errado.
+
+Mudar qualquer filtro dispara o `recarregar()` inteiro do contexto, não só o dashboard — é o
+preço do `recarregar` único, e por ora é barato.
+
+### ⚠️ Nem tudo na tela vem do `kpis`
+
+Alguns blocos são **derivados das listas** que o `AppContext` já carregou, não da resposta do
+dashboard: carga por analista, projetos por tipo, projetos recentes, o total do gráfico de ritmo
+e o card "Pendências na Fila". Isso custou um bug encontrado na conferência visual de
+16/09/2026: com o filtro de analista ligado, tudo que vinha da API zerava e "Pendências na Fila"
+continuava mostrando 5 — metade do painel recortada, metade não, sem nada avisando. É
+exatamente o tipo de incoerência que faz o gestor parar de confiar nos números.
+
+A regra que resolveu, e que qualquer bloco novo tem de seguir: **todo derivado parte de
+`projetosNoRecorte` / `pendenciasNoRecorte`**, nunca de `projetos` / `pendencias` crus.
+
+Fica uma limitação conhecida: o recorte de **período** não vale para esses derivados, só o de
+pessoa. Replicá-lo aqui significaria reimplementar no cliente a regra de que cada métrica tem
+a sua data de referência — que é justamente o que o `DashboardRepository` faz. Leia-os como "a
+situação de agora, para esta pessoa". Se isso incomodar, a saída é mover os três blocos para a
+API, não copiar a lógica de datas para cá.
+
+## Pendente
+
+- **Botão de reportar problema** (item 8 do checklist de produção do backend).
+- **Recarregar só o dashboard** quando muda um filtro dele, em vez de todas as listas.
+- **Mover para a API os blocos derivados do dashboard** (carga por analista, projetos por tipo,
+  projetos recentes), para eles passarem a respeitar o filtro de período como o resto da tela.
+- **Senha dos analistas semeados**: Ivan, Larissa e Camila existem sem senha e não conseguem
+  entrar. Definir uma para cada em Usuários & Acesso é trabalho de quem administra, não de
+  migration — semear senha no repositório é o que o checklist de produção proíbe.

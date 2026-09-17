@@ -1,0 +1,300 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   Tokens de interface
+   --------------------------------------------------------------------------
+   Uma definição por papel, e o `.dark` troca só o valor. Os componentes usam
+   `bg-superficie`, `border-borda`, `text-texto-suave` — nunca o hex cru.
+
+   Antes o modo escuro era um bloco de overrides `!important` que casava com o
+   texto literal da classe (`html.dark .bg-\[\#F4F6F8\]`). Funcionava por
+   coincidência de string: renomear uma classe apagava o tema sem erro nenhum.
+   O bloco de compatibilidade lá embaixo é o resto disso, e encolhe a cada
+   módulo migrado.
+
+   Paleta escura no espírito do painel de referência: quase preto de fundo,
+   superfície um passo acima, borda fina fazendo a separação — sem sombra.
+   ========================================================================== */
+
+:root {
+  --fundo: #F4F6F8;
+  --superficie: #FFFFFF;
+  --superficie-elevada: #FFFFFF;
+  --superficie-sutil: #F8FAFC;
+  --borda: #E7EAEF;
+  --borda-forte: #D5DAE2;
+  --texto: #17201A;
+  --texto-suave: #5B6560;
+  --texto-apagado: #8C948F;
+
+  --barra-rolagem: #cbd5e1;
+  --barra-rolagem-hover: #94a3b8;
+}
+
+html.dark {
+  --fundo: #0F1012;
+  --superficie: #16171A;
+  --superficie-elevada: #1C1D21;
+  --superficie-sutil: #191A1E;
+  --borda: rgba(255, 255, 255, 0.035);
+  --borda-forte: rgba(255, 255, 255, 0.06);
+  --texto: #FFFFFF;
+  --texto-suave: #8E929C;
+  --texto-apagado: #525660;
+
+  --barra-rolagem: #1E2025;
+  --barra-rolagem-hover: #2E3139;
+}
+
+@layer base {
+  body {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: var(--texto);
+    background-color: var(--fundo);
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--barra-rolagem);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--barra-rolagem-hover);
+}
+
+/* ==========================================================================
+   Design Elegante Escuro (Metric Style - Zero Bordas Brancas)
+   --------------------------------------------------------------------------
+   Na referência visual (Metric), os cards são superfícies escuras aveludadas
+   sem contorno branco destacado. A separação visual vem exclusivamente da
+   diferença sutil de tom entre o fundo (#0F1012) e a superfície (#16171A).
+   ========================================================================== */
+
+/* Reseta qualquer borda branca acidental do Tailwind preflight (#e5e7eb) */
+html.dark *,
+html.dark *::before,
+html.dark *::after {
+  border-color: rgba(255, 255, 255, 0.035);
+}
+
+/* Cards e superfícies: 100% sem bordas brancas */
+html.dark .bg-superficie,
+html.dark .rounded-card,
+html.dark .rounded-2xl {
+  border-color: transparent !important;
+}
+
+/* Sidebar e Header integrados sem linhas brancas */
+html.dark aside,
+html.dark .bg-solar-sidebar {
+  background-color: #0E0F12 !important;
+  border-right-color: rgba(255, 255, 255, 0.03) !important;
+}
+
+html.dark header {
+  border-bottom-color: rgba(255, 255, 255, 0.03) !important;
+}
+
+html.dark .bg-\[\#F4F6F8\],
+html.dark .bg-solar-bg {
+  background-color: var(--fundo) !important;
+}
+
+html.dark .bg-white {
+  background-color: var(--superficie) !important;
+}
+
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/50,
+html.dark .bg-slate-50\/60,
+html.dark .bg-slate-50\/70 {
+  background-color: var(--superficie-sutil) !important;
+}
+
+html.dark .bg-slate-100 {
+  background-color: var(--superficie-elevada) !important;
+}
+
+/* Força anulação de qualquer borda cinza-claro/branca que venha de classes utilitárias */
+html.dark .border-slate-100,
+html.dark .border-slate-200,
+html.dark .border-slate-200\/80,
+html.dark .border-slate-300,
+html.dark .border-gray-200,
+html.dark .border-white\/10,
+html.dark .border-white\/20,
+html.dark .border-white\/\[0\.08\],
+html.dark .border-white\/\[0\.06\] {
+  border-color: transparent !important;
+}
+
+/* Divisores internos suaves e escuros */
+html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-borda > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(255, 255, 255, 0.035) !important;
+}
+
+html.dark tr.border-b,
+html.dark th.border-b,
+html.dark div.border-b {
+  border-bottom-color: rgba(255, 255, 255, 0.035) !important;
+}
+
+html.dark tr.border-t,
+html.dark div.border-t {
+  border-top-color: rgba(255, 255, 255, 0.035) !important;
+}
+
+html.dark .text-slate-800,
+html.dark .text-slate-900,
+html.dark .text-solar-darkest,
+html.dark .text-gray-900,
+html.dark .text-gray-800 {
+  color: var(--texto) !important;
+}
+
+html.dark .text-slate-700,
+html.dark .text-gray-700 {
+  color: #E2E4E8 !important;
+}
+
+html.dark .text-slate-600,
+html.dark .text-slate-500,
+html.dark .text-\[\#424342\],
+html.dark .text-solar-neutral,
+html.dark .text-gray-600,
+html.dark .text-gray-500 {
+  color: var(--texto-suave) !important;
+}
+
+html.dark .text-slate-400,
+html.dark .text-gray-400 {
+  color: var(--texto-apagado) !important;
+}
+
+html.dark tr.hover\:bg-slate-50\/70:hover,
+html.dark tr.hover\:bg-slate-50:hover,
+html.dark .hover\:bg-slate-50:hover {
+  background-color: rgba(255, 255, 255, 0.02) !important;
+}
+
+html.dark .hover\:bg-slate-100:hover {
+  background-color: var(--superficie-elevada) !important;
+}
+
+html.dark .hover\:text-slate-800:hover,
+html.dark .hover\:text-slate-900:hover {
+  color: var(--texto) !important;
+}
+
+/* Reset de sombras turvas no modo escuro */
+html.dark .shadow-sm,
+html.dark .shadow-md,
+html.dark .shadow-card,
+html.dark .shadow-card-hover,
+html.dark .shadow-lg {
+  box-shadow: none !important;
+}
+
+/* Campos de formulário e filtros: bordas muito escuras ou transparentes */
+html.dark input:not([type="checkbox"]):not([type="radio"]),
+html.dark select,
+html.dark textarea {
+  background-color: var(--superficie-sutil) !important;
+  color: var(--texto) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+html.dark input:not([type="checkbox"]):not([type="radio"]):focus,
+html.dark select:focus,
+html.dark textarea:focus {
+  border-color: #10B981 !important;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.3) !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: var(--texto-apagado) !important;
+}
+
+html.dark select option {
+  background-color: var(--superficie-elevada) !important;
+  color: var(--texto) !important;
+}
+
+/* Pílulas de status sem bordas brancas (fundo translúcido puro) */
+html.dark .bg-emerald-50,
+html.dark .bg-emerald-50\/50,
+html.dark .bg-emerald-50\/70 {
+  background-color: rgba(16, 185, 129, 0.12) !important;
+  border-color: transparent !important;
+}
+
+html.dark .text-emerald-600,
+html.dark .text-emerald-700,
+html.dark .text-emerald-800,
+html.dark .text-emerald-900 {
+  color: #34D399 !important;
+}
+
+html.dark .bg-rose-50,
+html.dark .bg-rose-50\/50 {
+  background-color: rgba(244, 63, 94, 0.12) !important;
+  border-color: transparent !important;
+}
+
+html.dark .text-rose-600,
+html.dark .text-rose-700,
+html.dark .text-rose-900 {
+  color: #FB7185 !important;
+}
+
+html.dark .bg-sky-50,
+html.dark .bg-sky-50\/50 {
+  background-color: rgba(14, 165, 233, 0.12) !important;
+  border-color: transparent !important;
+}
+
+html.dark .text-sky-600,
+html.dark .text-sky-700,
+html.dark .text-sky-800,
+html.dark .text-sky-900 {
+  color: #38BDF8 !important;
+}
+
+html.dark .bg-amber-50,
+html.dark .bg-amber-50\/50 {
+  background-color: rgba(245, 158, 11, 0.12) !important;
+  border-color: transparent !important;
+}
+
+html.dark .text-amber-600,
+html.dark .text-amber-700,
+html.dark .text-amber-800,
+html.dark .text-amber-900 {
+  color: #FBBF24 !important;
+}
+
+/* Modais e backdrops */
+html.dark .bg-slate-900\/40,
+html.dark .bg-black\/50 {
+  background-color: rgba(0, 0, 0, 0.8) !important;
+  backdrop-filter: blur(4px);
+}
