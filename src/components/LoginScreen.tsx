@@ -1,14 +1,39 @@
-import React, { useState } from 'react';
-import { Sun, Moon, LogIn, AlertCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Sun, Moon, LogIn, AlertCircle, Clock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 
+/** "2 min 30 s" ou "45 s" — o suficiente para a pessoa decidir se espera ou vai tomar um café. */
+function tempoLegivel(segundos: number): string {
+  if (segundos < 60) return `${segundos} s`;
+  const minutos = Math.floor(segundos / 60);
+  const resto = segundos % 60;
+  return resto === 0 ? `${minutos} min` : `${minutos} min ${resto} s`;
+}
+
 export const LoginScreen: React.FC = () => {
-  const { entrar, erroLogin } = useAuth();
+  const { entrar, erroLogin, bloqueadoAte } = useAuth();
   const { tema, alternarTema } = useTheme();
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [enviando, setEnviando] = useState(false);
+  const [agora, setAgora] = useState(() => Date.now());
+
+  /**
+   * O relógio só corre enquanto há bloqueio — um intervalo permanente redesenharia a tela de
+   * login a cada segundo pelo resto da sessão sem nada mudar.
+   */
+  useEffect(() => {
+    if (!bloqueadoAte) return;
+    setAgora(Date.now());
+    const relogio = setInterval(() => setAgora(Date.now()), 1000);
+    return () => clearInterval(relogio);
+  }, [bloqueadoAte]);
+
+  const segundosRestantes = bloqueadoAte
+    ? Math.max(0, Math.ceil((bloqueadoAte - agora) / 1000))
+    : 0;
+  const bloqueado = segundosRestantes > 0;
 
   const enviar = async (evento: React.FormEvent) => {
     evento.preventDefault();
@@ -83,27 +108,51 @@ export const LoginScreen: React.FC = () => {
             />
           </div>
 
-          {erroLogin && (
+          {/*
+            O bloqueio por tentativas tem aviso próprio, em âmbar e não em vermelho: não é erro
+            de quem está digitando, é o servidor dizendo "espere". Mostrado no lugar do erro de
+            credencial porque, enquanto dura, a senha nem chega a ser avaliada — dizer "senha
+            incorreta" aqui faria a pessoa tentar de novo achando que errou a digitação.
+          */}
+          {bloqueado ? (
             <div
               role="alert"
-              className="flex items-start gap-2 text-sm text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10
-                         border border-rose-200/80 dark:border-rose-500/20 rounded-lg px-3 py-2.5"
+              className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10
+                         border border-amber-200/80 dark:border-amber-500/20 rounded-lg px-3 py-2.5"
             >
-              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>{erroLogin}</span>
+              <Clock className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>
+                Tentativas demais. Aguarde <strong>{tempoLegivel(segundosRestantes)}</strong> para
+                tentar de novo. Insistir agora não adianta e não aumenta a espera.
+              </span>
             </div>
+          ) : (
+            erroLogin && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 text-sm text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10
+                           border border-rose-200/80 dark:border-rose-500/20 rounded-lg px-3 py-2.5"
+              >
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{erroLogin}</span>
+              </div>
+            )
           )}
 
           <button
             type="submit"
-            disabled={enviando}
+            disabled={enviando || bloqueado}
             className="w-full flex items-center justify-center gap-2 bg-solar-primary
                        hover:bg-solar-primary-hover disabled:opacity-60
                        disabled:cursor-not-allowed text-white font-medium text-sm
                        rounded-lg px-4 py-2.5 transition"
           >
-            <LogIn className="w-4 h-4" />
-            {enviando ? 'Entrando…' : 'Entrar'}
+            {bloqueado ? <Clock className="w-4 h-4" /> : <LogIn className="w-4 h-4" />}
+            {bloqueado
+              ? `Aguarde ${tempoLegivel(segundosRestantes)}`
+              : enviando
+                ? 'Entrando…'
+                : 'Entrar'}
           </button>
 
           {/*

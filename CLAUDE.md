@@ -70,10 +70,65 @@ as regras de negócio, que chegam como 409 com texto pronto:
 | `TRANSICAO_INVALIDA` | o status atual não permite aquela mudança |
 | `ACESSO_NEGADO` | o papel do usuário não permite a ação |
 | `UNIFICACAO_NAO_FEITA` | o desligamento só é pedido depois de confirmada a unificação |
+| `NUMERO_SOLICITACAO_OBRIGATORIO` | envio à Coelba sem o nº da solicitação (ver abaixo) |
+| `LIMITE_DE_TENTATIVAS` | 429 no login: tentativas demais (ver abaixo) |
+| `SEM_CONEXAO` | **não vem da API** — é o `client.ts` traduzindo falha de rede (ver abaixo) |
 
 Os dois primeiros são recusas **diferentes** de propósito, e as telas antecipam qual será
 (`bloqueioDaResolucao` em Pendências, `bloqueioDoEnvio` em Projetos) em vez de deixar o analista
 descobrir clicando. Juntá-los mandaria cobrar um cliente que talvez não deva nada.
+
+#### Login bloqueado por tentativas (19/09/2026)
+
+O backend ganhou limite de tentativas no `/api/auth/login` (BCrypt é caro de propósito, e sem
+limite isso vira vetor de negação de serviço). A recusa vem como **429** com `codigo:
+LIMITE_DE_TENTATIVAS` e o cabeçalho **`Retry-After`** em segundos.
+
+- `ApiError.esperarSegundos` lê o `Retry-After`. É o único cabeçalho que o cliente HTTP olha, e
+  existe para a tela **contar o tempo** em vez de dizer "tente mais tarde" e deixar a pessoa
+  adivinhar quanto é mais tarde.
+- `AuthContext.bloqueadoAte` guarda o instante em que a espera acaba. A `LoginScreen` faz a
+  contagem regressiva, **desabilita o botão** enquanto dura e mostra um aviso **âmbar**, não
+  vermelho: não é erro de quem digita, é o servidor pedindo espera.
+- ⚠️ **O aviso substitui a mensagem de credencial** enquanto o bloqueio dura. Enquanto ele vale,
+  a senha nem chega a ser avaliada — mostrar "credenciais inválidas" faria a pessoa achar que
+  errou a digitação e tentar de novo, que é exatamente o que não ajuda. (Insistir também não
+  aumenta a espera: a tentativa bloqueada não entra na contagem do servidor.)
+- Distinguir este caso **não vaza nada**: ele não fala sobre a conta, fala sobre quantas vezes
+  já se tentou. Todos os outros motivos de recusa seguem com a mesma mensagem genérica, de
+  propósito.
+
+#### Falha de rede virou erro com código (19/09/2026)
+
+O `fetch` lança `TypeError` quando não alcança o servidor — API desligada, rede caída, CORS
+barrado —, e isso chegava às telas como erro genérico. Na de login, um backend simplesmente
+desligado aparecia como "não foi possível entrar", indistinguível de senha errada; era um buraco
+conhecido registrado na seção 11 do CLAUDE.md do backend.
+
+Agora o `client.ts` converte em `ApiError` com `status: 0` e `codigo: SEM_CONEXAO`, e a mensagem
+diz para conferir se a API está no ar. Vale para **todas** as telas, não só a de login.
+
+### O nº da solicitação é obrigatório para enviar à Coelba (17/09/2026)
+
+Decisão do usuário. É a chave que casa o retorno por e-mail da Coelba com o projeto (seção 9 do
+CLAUDE.md do backend); sem ela o projeto vai à Coelba sem chave nenhuma de volta, e a automação
+da etapa 3 não tem como saber de que projeto o e-mail fala.
+
+Vale no **envio e no reenvio** — no reenvio a Coelba pode emitir outro número, e aceitar vazio
+manteria o do ciclo anterior. O modal já pré-preenche o número atual no reenvio, então o custo
+para a analista é confirmar, não digitar de novo.
+
+Três barreiras, da mais amigável para a última:
+
+1. o botão "Confirmar Envio" fica **desabilitado** enquanto o campo está vazio — o analista
+   descobre antes de clicar, e não por um toast de erro;
+2. `handleConfirmarEncaminhamento` recusa em branco, para nenhum caminho alternativo escapar;
+3. `encaminharProjeto` e `reencaminharProjeto` recebem `numeroSolicitacao: string` **não
+   opcional**, e por isso ele vem **antes** da `dataArt` na assinatura de `encaminharProjeto` —
+   assim o próprio TypeScript recusa a chamada sem ele, em vez de descobrirmos com um 400.
+
+⚠️ A API recusa com **400 `VALIDACAO`** (é `@NotBlank` de corpo), não com o 409 da tabela acima.
+O 409 `NUMERO_SOLICITACAO_OBRIGATORIO` existe para as origens que não são a tela.
 
 ⚠️ **Invariante do débito: um débito trava uma etapa só** — ou a resolução da pendência, ou a
 homologação do projeto, nunca as duas (reforçado pelo usuário em 16/09/2026). Na prática, isso
@@ -93,7 +148,7 @@ pendência cobrada de quem nunca teve pendência. Quem responde "que etapa é es
 
 | Tipo | Aparece quando |
 |---|---|
-| `PENDENCIA` | há pendência `ABERTA`/`EM_ANDAMENTO` do cliente |
+| `PENDENCIA` | há pendência `ABERTA` do cliente |
 | `HOMOLOGACAO` | há projeto do cliente ainda não `APROVADO` |
 | qualquer | o débito daquele tipo está `ATIVO` |
 
@@ -128,6 +183,40 @@ backend** — não havia como cadastrar o primeiro cliente (era o estado até 04
   ou **apontar pendência** (abre modal para escolher o tipo — Troca de Titularidade, Ligação Nova, etc. —,
   criando a pendência e marcando o cliente como `COM_PENDENCIA` automaticamente, sem precisar navegar
   ao módulo de Pendências e reinserir os dados manualmente).
+
+### Selo "CRM": de onde o cadastro veio (17/09/2026)
+
+Desde que o backend importa clientes do Nectar automaticamente (seção 9 do CLAUDE.md do backend),
+a tabela mostra um selo **CRM** ao lado do nome quando `cliente.origem === 'CRM_NECTAR'`. Pedido
+do usuário, e não enfeite: **a confiança nos dados é diferente**. O cliente do CRM chega com
+cidade e vendedor normalizados contra as listas do cadastro, e o que não casou chega **vazio** —
+então campo em branco ali significa "o CRM não tinha o dado no padrão" e pede o preenchimento de
+alguém, que é justamente o trabalho da triagem. Num cadastro manual, campo vazio é esquecimento.
+
+Só o cliente do CRM ganha selo: manual é o caso normal, e um selo em toda linha viraria ruído. O
+`title` do selo traz o `nectarOportunidadeId`, que é como se acha o negócio no Nectar — necessário
+porque **um cliente com vários negócios vira vários cadastros**, com o nome repetido e nada mais
+distinguindo as linhas.
+
+⚠️ `origem` e `nectarOportunidadeId` estão **fora** de `DadosCliente`: são procedência, não campos
+editáveis. Editar um cadastro não pode fazer um cliente do CRM passar por cadastro manual.
+
+### As listas de municípios e vendedores vêm da API
+
+⚠️ **`src/data/constantes.ts` foi apagado em 17/09/2026.** Os 417 municípios da Bahia e os
+vendedores agora vêm de `GET /api/referencias`, carregados uma vez pelo `AppContext` e servidos ao
+`ClienteModal` por `useApp().referencias`.
+
+O motivo é o de sempre: a importação do Nectar normaliza cidade e vendedor **no servidor**, contra
+o mesmo padrão que este formulário oferece. Com a lista aqui também, seriam duas cópias — e o
+problema não é teórico: a primeira importação real entrou com "CACULE", "VITÓRIA DA CONQUISTA" e
+"Vitória Da Conquista" como cidades diferentes, e com vendedores ("Rodrigo soares") que o
+`<select>` desta tela não oferece. O backend é a fonte de verdade.
+
+Consequência: as listas nascem **vazias** e se preenchem na primeira carga. O campo de município
+e o seletor de vendedor aparecem sem opção por um instante — aceitável, e melhor que uma cópia
+local que envelhece. Um vendedor novo agora exige deploy do **backend**
+(`src/main/resources/referencia/vendedores.txt`), não deste repositório.
 
 ## RBAC na interface
 
@@ -168,6 +257,19 @@ Google). Contas antigas sem senha aparecem na tela com o aviso de que não conse
   guarda do backend, não substituto dela.
 - Depois de cada mutação, o módulo chama `recarregar()` do contexto: os seletores de responsável
   das outras telas saem deste mesmo cadastro e ficariam desatualizados até o próximo F5.
+
+## Pendências: não há botão de "iniciar"
+
+⚠️ O botão de **play** ("Iniciar Atendimento", `ABERTA → EM_ANDAMENTO`) saiu em 19/09/2026,
+decisão do usuário, junto com o status e o endpoint por trás dele. Apontar a pendência na
+triagem do cliente **é** iniciá-la: dali o cliente já cai nesta tela e a solicitação já correu
+na Coelba. O clique não mudava nada — o tempo de resolução sempre saiu de `solicitadoEm`,
+gravado na criação —, e o que ele produzia era pendência parada em "Aberta" por esquecimento,
+indistinguível de trabalho que ninguém pegou.
+
+Sobraram três status (`ABERTA` → `RESOLVIDA` | `CANCELADA`), então **"Aberta" é o único estado
+ativo** e toda condição de fila da tela é `status === 'ABERTA'`, não mais uma dupla. O andamento
+("protocolo aberto na Coelba") vive na observação, que é editável sempre — ver abaixo.
 
 ## Pendências: a observação é editável sempre
 

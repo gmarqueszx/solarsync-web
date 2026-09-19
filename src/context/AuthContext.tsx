@@ -9,6 +9,12 @@ interface AuthContextType {
   papel: Papel;
   carregando: boolean;
   erroLogin: string | null;
+  /**
+   * Instante (ms) até o qual o servidor está recusando tentativas de login, vindo do 429 e do
+   * seu `Retry-After`. Nulo quando não há bloqueio. A tela usa para contar o tempo e desabilitar
+   * o botão, em vez de deixar a pessoa insistir num formulário que só devolve erro.
+   */
+  bloqueadoAte: number | null;
   entrar: (email: string, senha: string) => Promise<void>;
   sair: () => void;
   temPapel: (...papeis: Papel[]) => boolean;
@@ -28,6 +34,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [usuario, setUsuario] = useState<UsuarioLogado | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erroLogin, setErroLogin] = useState<string | null>(null);
+  const [bloqueadoAte, setBloqueadoAte] = useState<number | null>(null);
 
   const sair = useCallback(() => {
     // Não há logout no servidor: a API é stateless, o cliente descarta os tokens.
@@ -69,6 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     armazenamentoDeToken.guardar(resposta.accessToken, resposta.refreshToken);
     setUsuario(resposta.usuario);
     setErroLogin(null);
+    setBloqueadoAte(null);
   };
 
   const entrar = async (email: string, senha: string) => {
@@ -76,8 +84,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       aplicarLogin(await authApi.login(email, senha));
     } catch (erro) {
-      // A API devolve a mesma mensagem para todos os motivos, de propósito: diferenciar
-      // permitiria descobrir quais e-mails têm conta.
+      // A API devolve a mesma mensagem para todos os motivos de recusa de credencial, de
+      // propósito: diferenciar permitiria descobrir quais e-mails têm conta. Só o bloqueio por
+      // tentativas é distinguido, e não vaza nada — ele não fala sobre a conta, fala sobre
+      // quantas vezes já se tentou.
+      if (erro instanceof ApiError && erro.codigo === 'LIMITE_DE_TENTATIVAS') {
+        setBloqueadoAte(
+          erro.esperarSegundos ? Date.now() + erro.esperarSegundos * 1000 : null,
+        );
+      }
       setErroLogin(
         erro instanceof ApiError ? erro.mensagemAmigavel : 'Não foi possível entrar',
       );
@@ -91,7 +106,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider
-      value={{ usuario, papel, carregando, erroLogin, entrar, sair, temPapel }}
+      value={{ usuario, papel, carregando, erroLogin, bloqueadoAte, entrar, sair, temPapel }}
     >
       {children}
     </AuthContext.Provider>
