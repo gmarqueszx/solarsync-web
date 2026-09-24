@@ -1,0 +1,5 @@
+# O Dockerfile é interpretado no Linux, dentro do build. Com CRLF, o `\r` entra no fim de cada
+# instrução RUN e o erro que sai não diz o que está errado — este repositório é editado no
+# Windows, onde core.autocrlf=true é o padrão da instalação do Git.
+Dockerfile text eol=lf
+.dockerignore text eol=lf
