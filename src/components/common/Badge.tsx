@@ -60,6 +60,15 @@ export const Badge: React.FC<BadgeProps> = ({
     <span
       className={cn(
         'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-2xs font-medium tracking-tight whitespace-nowrap',
+        /*
+          ⚠️ `max-w-fit` não é enfeite. `inline-flex` vira `display: flex` quando a pílula é
+          filha de um contêiner flex, e aí o `align-self: stretch` padrão a estica pela largura
+          inteira da coluna — era o que fazia "Falta checar" virar um retângulo âmbar atravessado
+          na tabela de Clientes. Limitar a largura conserta sem exigir `items-start` em cada
+          um dos contêineres que usam Badge.
+        */
+        'max-w-fit',
+        'transition-colors duration-120',
         estilo.container,
         className,
       )}

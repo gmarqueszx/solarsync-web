@@ -32,7 +32,8 @@ export const BadgeTempo: React.FC<{ dias: number | null | undefined; className?:
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-2xs font-medium tabular-nums',
+        // `max-w-fit` pela mesma razão do Badge: em contêiner flex-col a pílula estica.
+        'inline-flex max-w-fit items-center gap-1 px-2 py-0.5 rounded-full border text-2xs font-medium tabular-nums',
         tom,
         className,
       )}

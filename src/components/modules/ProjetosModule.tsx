@@ -16,6 +16,8 @@ import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { ClienteModal } from '../common/ClienteModal';
+import { SelosCliente } from '../common/SelosCliente';
+import { bloqueioDoEnvio as montarBloqueioDoEnvio, diasAte } from '../../utils/debito';
 import {
   Search,
   Plus,
@@ -28,6 +30,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Pencil,
+  CalendarClock,
 } from 'lucide-react';
 import { useOrdenacao } from '../../hooks/useOrdenacao';
 import { Ordenavel } from '../ui/Tabela';
@@ -56,7 +59,11 @@ const VALORES_ORDENAVEIS = {
   status: (p: ProjetoLista) => PESO_STATUS[p.status],
 };
 
-type ColunaProjeto = keyof typeof VALORES_ORDENAVEIS;
+/**
+ * `proximoDebito` fica de fora do mapa acima porque o valor não está no projeto: ele vem da
+ * consulta de débito do cliente, que só existe dentro do componente. O extrator é montado lá.
+ */
+type ColunaProjeto = keyof typeof VALORES_ORDENAVEIS | 'proximoDebito';
 
 export const ProjetosModule: React.FC = () => {
   const {
@@ -73,20 +80,27 @@ export const ProjetosModule: React.FC = () => {
   } = useApp();
 
   /**
-   * Por que o envio à Coelba será recusado, se for o caso. Espelha as duas guardas do
-   * `ProjetoService`: `SEM_CONSULTA` pede a consulta do débito de homologação (o passo do
-   * projetista ao receber o cliente), `DEBITO_ATIVO` pede a cobrança. Antecipar aqui evita a
-   * analista descobrir o motivo só depois de clicar em enviar.
+   * Por que o envio à Coelba será recusado, se for o caso. Antecipa as três guardas do
+   * `ProjetoService` para a analista não descobrir o motivo só depois de clicar em enviar.
+   *
+   * A montagem vive em `utils/debito`, não aqui: a terceira guarda (próximo débito a vencer)
+   * nasceria copiada para a tela de Débitos assim que alguém precisasse dela lá.
    */
-  const bloqueioDoEnvio = useMemo(() => {
-    const statusPorCliente = new Map(
-      debitos.filter(d => d.tipo === 'HOMOLOGACAO').map(d => [d.cliente.id, d.status]),
-    );
-    return (clienteId: number): 'SEM_CONSULTA' | 'DEBITO_ATIVO' | null => {
-      const status = statusPorCliente.get(clienteId);
-      if (status === undefined) return 'SEM_CONSULTA';
-      return status === 'ATIVO' ? 'DEBITO_ATIVO' : null;
-    };
+  const bloqueioDoEnvio = useMemo(() => montarBloqueioDoEnvio(debitos), [debitos]);
+
+  /**
+   * O vencimento da próxima conta de cada cliente, para a coluna "Próximo débito".
+   *
+   * Sai do débito de **homologação**, que é o que trava o envio — o de pendência pertence a
+   * outra etapa e mostrá-lo aqui faria a coluna responder a pergunta errada. Ausente significa
+   * "não informado", e a coluna diz isso: não existe data a inventar.
+   */
+  const proximoDebitoPorCliente = useMemo(() => {
+    const mapa = new Map<number, string>();
+    debitos
+      .filter(d => d.tipo === 'HOMOLOGACAO' && d.proximoVencimento)
+      .forEach(d => mapa.set(d.cliente.id, d.proximoVencimento as string));
+    return mapa;
   }, [debitos]);
 
   const [busca, setBusca] = useState('');
@@ -97,9 +111,23 @@ export const ProjetosModule: React.FC = () => {
   const itensPorPagina = 6;
 
   // Abre pelo mais antigo em recebimento: é o projeto parado que atrasa o cliente.
+  // Prioridade antes de qualquer coluna: o cliente adiantado tem de estar no topo desta fila
+  // como está no topo das outras. Espelha o `PrioridadePrimeiro` do backend.
+  // A data ISO ordena certo como texto, e linha sem próximo débito vai para o fim nas duas
+  // direções (regra do próprio hook) — que é onde "Não informado" tem de ficar.
+  const valoresOrdenaveis = useMemo(
+    () => ({
+      ...VALORES_ORDENAVEIS,
+      proximoDebito: (p: ProjetoLista) =>
+        proximoDebitoPorCliente.get(p.cliente.id) ?? null,
+    }),
+    [proximoDebitoPorCliente],
+  );
+
   const { ordenacao, ordenar, cabecalho } = useOrdenacao<ProjetoLista, ColunaProjeto>(
-    VALORES_ORDENAVEIS,
+    valoresOrdenaveis,
     { campo: 'cronograma', direcao: 'asc' },
+    (p) => p.cliente.prioridade,
   );
 
   // Modals
@@ -246,12 +274,15 @@ export const ProjetosModule: React.FC = () => {
 
   const handleConfirmarEncaminhamento = async () => {
     if (!projetoSelecionado) return;
-    const numero = numeroSolicitacaoEnvio.trim() || null;
+    // Obrigatório: a API recusa com 400, e o botão já fica desabilitado. Esta guarda é a
+    // terceira barreira, para nenhum caminho (Enter no formulário, por exemplo) escapar.
+    const numero = numeroSolicitacaoEnvio.trim();
+    if (!numero) return;
     try {
       if (modoEnvio === 'REENCAMINHAR') {
         await reencaminharProjeto(projetoSelecionado.id, numero);
       } else {
-        await encaminharProjeto(projetoSelecionado.id, dataArtEnvio || null, numero);
+        await encaminharProjeto(projetoSelecionado.id, numero, dataArtEnvio || null);
       }
       setIsModalEncaminharAberto(false);
       setIsModalDetalheAberto(false);
@@ -401,6 +432,14 @@ export const ProjetosModule: React.FC = () => {
                 <th className="py-3 px-4">
                   <Ordenavel {...cabecalho('cronograma')}>Cronograma (Receb. / Envio)</Ordenavel>
                 </th>
+                {/*
+                  A data que decide se o projeto pode ir à Coelba hoje. Fica ao lado do
+                  cronograma porque é lida junto com ele: "recebi, ainda não enviei, e tenho até
+                  quando?".
+                */}
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('proximoDebito')}>Próximo débito</Ordenavel>
+                </th>
                 <th className="py-3 px-4">
                   <Ordenavel {...cabecalho('status')}>Status Parecer</Ordenavel>
                 </th>
@@ -410,7 +449,7 @@ export const ProjetosModule: React.FC = () => {
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {projetosPaginados.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-400">
+                  <td colSpan={8} className="py-8 text-center text-slate-400">
                     Nenhum projeto encontrado com os filtros selecionados.
                   </td>
                 </tr>
@@ -419,7 +458,10 @@ export const ProjetosModule: React.FC = () => {
                   <tr key={proj.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-3.5 px-6">
                       <div className="flex items-center justify-between gap-1.5">
-                        <span className="font-medium text-slate-800">{proj.cliente.nome}</span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-medium text-slate-800">{proj.cliente.nome}</span>
+                          <SelosCliente cliente={proj.cliente} />
+                        </div>
                         <button
                           type="button"
                           onClick={() => abrirEdicaoClientePorId(proj.cliente.id)}
@@ -475,6 +517,39 @@ export const ProjetosModule: React.FC = () => {
                       </div>
                     </td>
                     <td className="py-3.5 px-4">
+                      {(() => {
+                        const vencimento = proximoDebitoPorCliente.get(proj.cliente.id);
+                        if (!vencimento) {
+                          // "Não informado" por extenso, e não um travessão: travessão se lê como
+                          // "não tem", e aqui não se sabe — a consulta pode simplesmente não ter
+                          // trazido a próxima data.
+                          return <span className="text-slate-400">Não informado</span>;
+                        }
+                        const dias = diasAte(vencimento);
+                        const iminente = dias <= 1;
+                        return (
+                          <span
+                            title={
+                              iminente
+                                ? 'Falta um dia ou menos: encaminhar agora é recusado, porque a '
+                                  + 'Coelba analisaria o projeto já com débito em aberto.'
+                                : `Faltam ${dias} dias para a próxima conta vencer.`
+                            }
+                            className={
+                              iminente
+                                ? 'inline-flex items-center gap-1 font-medium text-rose-700 tabular-nums'
+                                : 'inline-flex items-center gap-1 text-slate-700 tabular-nums'
+                            }
+                          >
+                            <CalendarClock
+                              className={iminente ? 'w-3 h-3 text-rose-500' : 'w-3 h-3 text-slate-400'}
+                            />
+                            {formatarData(vencimento)}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td className="py-3.5 px-4">
                       {getStatusBadge(proj.status)}
                       {proj.status === 'APROVADO' && proj.dataAprovacao && (
                         <div className="text-[10px] text-emerald-700 mt-1">
@@ -488,20 +563,31 @@ export const ProjetosModule: React.FC = () => {
                         </div>
                       )}
                       {/* O que vai barrar o envio, antes de o analista tentar. */}
-                      {[...ANTES_DO_ENVIO, 'REPROVADO'].includes(proj.status)
-                        && bloqueioDoEnvio(proj.cliente.id) !== null && (
+                      {(() => {
+                        if (![...ANTES_DO_ENVIO, 'REPROVADO'].includes(proj.status)) return null;
+                        const bloqueio = bloqueioDoEnvio(proj.cliente.id);
+                        if (!bloqueio) return null;
+                        return (
                           <div className="mt-1">
-                            {bloqueioDoEnvio(proj.cliente.id) === 'SEM_CONSULTA' ? (
+                            {bloqueio.motivo === 'SEM_CONSULTA' && (
                               <span className="text-[10px] text-sky-700">
                                 Falta consultar o débito de homologação
                               </span>
-                            ) : (
+                            )}
+                            {bloqueio.motivo === 'DEBITO_ATIVO' && (
                               <span className="text-[10px] text-rose-700">
                                 Travado por débito de homologação
                               </span>
                             )}
+                            {bloqueio.motivo === 'PROXIMO_DEBITO' && (
+                              <span className="text-[10px] text-rose-700">
+                                Próximo débito vence em{' '}
+                                {formatarData(bloqueio.vencimento ?? null)} — aguarde a quitação
+                              </span>
+                            )}
                           </div>
-                        )}
+                        );
+                      })()}
                     </td>
                     <td className="py-3.5 px-6 text-right">
                       {/* Só as transições que a máquina de estados do backend aceita. */}
@@ -781,7 +867,8 @@ export const ProjetosModule: React.FC = () => {
             <button
               type="button"
               onClick={handleConfirmarEncaminhamento}
-              className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-sm"
+              disabled={!numeroSolicitacaoEnvio.trim()}
+              className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-xl transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Confirmar Envio
             </button>
@@ -796,20 +883,28 @@ export const ProjetosModule: React.FC = () => {
 
           <div>
             <label className="font-medium text-slate-700 block mb-1">
-              Nº da Solicitação na Coelba
+              Nº da Solicitação na Coelba <span className="text-rose-600">*</span>
             </label>
             <input
               type="text"
+              required
               maxLength={50}
               value={numeroSolicitacaoEnvio}
               onChange={(e) => setNumeroSolicitacaoEnvio(e.target.value)}
               placeholder="Ex: 2026-COE-004781"
               className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:ring-1 focus:ring-[#149911]"
             />
+            {/*
+              Obrigatório desde 17/09/2026: é a chave que casa o retorno por e-mail da Coelba com
+              este projeto. Sem ela o projeto vai à Coelba sem chave nenhuma de volta, e a
+              automação da etapa 3 não tem como saber de que projeto o e-mail fala. O botão fica
+              desabilitado em vez de a API recusar com 400 — o analista descobre antes de clicar.
+            */}
             <p className="text-[11px] text-[#424342] mt-1">
-              É o número que a Coelba devolve ao receber o projeto. Guardá-lo aqui é o que vai
-              permitir casar o e-mail diário de status com este registro.
-              {modoEnvio === 'REENCAMINHAR' && ' Em branco, mantém o número atual.'}
+              É o número que a Coelba devolve ao receber o projeto, e é por ele que o retorno por
+              e-mail é casado com este registro.
+              {modoEnvio === 'REENCAMINHAR' &&
+                ' No reenvio a Coelba pode emitir outro número: confirme o que ela devolveu agora.'}
             </p>
           </div>
 

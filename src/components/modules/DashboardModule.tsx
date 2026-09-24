@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { CardKPI } from '../ui/CardKPI';
+import { COR_SERIE, GraficoBarrasHorizontais, GraficoLinhas, Medidor } from '../ui/Graficos';
 import {
   ROTULO_STATUS_PROJETO,
   ROTULO_TIPO_PROJETO,
@@ -10,6 +11,7 @@ import {
   TipoProjeto,
 } from '../../types';
 import { formatarData, hojeISO, somarDiasISO } from '../../utils/data';
+import { contarPorBalde, intervaloDoGrafico, montarBaldes } from '../../utils/series';
 import {
   Clock,
   CheckCircle2,
@@ -82,6 +84,85 @@ export const DashboardModule: React.FC = () => {
     });
   };
 
+  /**
+   * ⚠️ Nem tudo nesta tela vem do `kpis`: alguns cards e gráficos são derivados das listas que o
+   * contexto já carregou (carga por analista, projetos por tipo, projetos recentes). Eles
+   * **precisam** aplicar o mesmo recorte de pessoa, senão o painel mostra metade dos números
+   * filtrados e metade não — foi o que apareceu na conferência de 16/09/2026: com o filtro
+   * ligado, tudo zerava e "Pendências na Fila" continuava em 5.
+   *
+   * O recorte de **período** continua não valendo para estas listas, e é uma limitação
+   * conhecida: cada métrica tem a sua data de referência, e replicar essa lógica aqui
+   * duplicaria no cliente o que o `DashboardRepository` já faz. O que vem do `kpis` respeita o
+   * período; o que é derivado é sempre a situação de agora.
+   *
+   * Os `useMemo` ficam **antes** do retorno de "indicadores indisponíveis": hook depois de um
+   * `return` condicional quebra a ordem entre renderizações.
+   */
+  const analistaFiltrado = kpis?.analistaId;
+
+  const projetosNoRecorte = useMemo(
+    () =>
+      analistaFiltrado
+        ? projetos.filter(p => p.analistaResponsavel?.id === analistaFiltrado)
+        : projetos,
+    [projetos, analistaFiltrado],
+  );
+
+  const pendenciasNoRecorte = useMemo(
+    () =>
+      analistaFiltrado
+        ? pendencias.filter(p => p.responsavel?.id === analistaFiltrado)
+        : pendencias,
+    [pendencias, analistaFiltrado],
+  );
+
+  /**
+   * O ritmo, agora saindo dos projetos de verdade.
+   *
+   * ⚠️ O gráfico era **desenhado à mão**: um `path` SVG com coordenadas fixas no código, que
+   * nunca mudava de forma por mais que os números mudassem. Os quatro pontos até calculavam um
+   * valor a partir dos KPIs, mas o valor não era usado em lugar nenhum — só a bolinha era
+   * desenhada, sempre na mesma altura.
+   *
+   * As duas séries são as duas pontas do trâmite com a Coelba: o que **entrou** na fila da
+   * distribuidora (`dataEncaminhado`) e o que **saiu** aprovado (`dataAprovacao`). Postas
+   * juntas elas respondem a pergunta que o subtítulo do card promete e que nenhum número
+   * isolado responde: o gargalo é a gente enviando pouco, ou a Coelba devolvendo devagar?
+   */
+  const ritmo = useMemo(() => {
+    const datas = [
+      ...projetosNoRecorte.map(p => p.dataAprovacao),
+      ...projetosNoRecorte.map(p => p.dataEncaminhado),
+    ];
+    const intervalo = intervaloDoGrafico(datas, periodoDashboard.de, periodoDashboard.ate);
+    if (!intervalo) return null;
+
+    const { baldes, granularidade } = montarBaldes(intervalo.de, intervalo.ate);
+    return {
+      granularidade,
+      rotulos: baldes.map(b => b.rotulo),
+      aprovados: contarPorBalde(
+        baldes,
+        projetosNoRecorte.map(p => p.dataAprovacao),
+      ),
+      encaminhados: contarPorBalde(
+        baldes,
+        projetosNoRecorte.map(p => p.dataEncaminhado),
+      ),
+    };
+  }, [projetosNoRecorte, periodoDashboard.de, periodoDashboard.ate]);
+
+  const contagemTipos = useMemo(
+    () =>
+      (Object.keys(ROTULO_TIPO_PROJETO) as TipoProjeto[]).map(tipo => ({
+        tipo,
+        label: ROTULO_TIPO_PROJETO[tipo],
+        quantidade: projetosNoRecorte.filter(p => p.tipoProjeto === tipo).length,
+      })),
+    [projetosNoRecorte],
+  );
+
   if (!kpis) {
     return (
       <Card className="p-12 text-center">
@@ -99,33 +180,11 @@ export const DashboardModule: React.FC = () => {
     );
   }
 
-  /**
-   * ⚠️ Nem tudo nesta tela vem do `kpis`: alguns cards e gráficos são derivados das listas que o
-   * contexto já carregou (carga por analista, projetos por tipo, projetos recentes). Eles
-   * **precisam** aplicar o mesmo recorte de pessoa, senão o painel mostra metade dos números
-   * filtrados e metade não — foi o que apareceu na conferência de 16/09/2026: com o filtro
-   * ligado, tudo zerava e "Pendências na Fila" continuava em 5.
-   *
-   * O recorte de **período** continua não valendo para estas listas, e é uma limitação
-   * conhecida: cada métrica tem a sua data de referência, e replicar essa lógica aqui
-   * duplicaria no cliente o que o `DashboardRepository` já faz. O que vem do `kpis` respeita o
-   * período; o que é derivado é sempre a situação de agora.
-   */
-  const analistaFiltrado = kpis.analistaId;
-  const projetosNoRecorte = analistaFiltrado
-    ? projetos.filter(p => p.analistaResponsavel?.id === analistaFiltrado)
-    : projetos;
-  const pendenciasNoRecorte = analistaFiltrado
-    ? pendencias.filter(p => p.responsavel?.id === analistaFiltrado)
-    : pendencias;
-
   const taxaAprovacao = Math.round(
     (kpis.projetosAprovados / (projetosNoRecorte.length || 1)) * 100,
   );
 
-  const pendenciasAtivas = pendenciasNoRecorte.filter(
-    p => p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO',
-  ).length;
+  const pendenciasAtivas = pendenciasNoRecorte.filter(p => p.status === 'ABERTA').length;
 
   // SLA de tempos médios
   const metricasTempo = [
@@ -202,14 +261,6 @@ export const DashboardModule: React.FC = () => {
     };
   });
 
-  // Tipos de Projeto
-  const contagemTipos = (Object.keys(ROTULO_TIPO_PROJETO) as TipoProjeto[]).map(tipo => ({
-    tipo,
-    label: ROTULO_TIPO_PROJETO[tipo],
-    quantidade: projetosNoRecorte.filter(p => p.tipoProjeto === tipo).length,
-  }));
-  const maxQtdTipo = Math.max(...contagemTipos.map(t => t.quantidade), 1);
-
   // Projetos mais recentes para a tabela executiva (estilo "Recent activity" do Metric)
   const projetosRecentes = [...projetosNoRecorte].slice(0, 6);
 
@@ -268,10 +319,16 @@ export const DashboardModule: React.FC = () => {
                   key={p}
                   type="button"
                   onClick={() => aplicarAtalho(p)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                  aria-pressed={ativo}
+                  /*
+                    A pílula ativa era `bg-white/10` — invisível no tema claro, onde a cápsula
+                    que a contém já é branca. No claro a marcação precisa de superfície sutil
+                    mais contorno; no escuro o véu branco continua certo.
+                  */
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-180 ease-suave ${
                     ativo
-                      ? 'bg-white/10 text-texto font-semibold shadow-none'
-                      : 'text-texto-suave hover:text-texto hover:bg-white/[0.04]'
+                      ? 'bg-superficie-sutil dark:bg-white/10 text-texto font-semibold shadow-card dark:shadow-none ring-1 ring-borda dark:ring-0'
+                      : 'text-texto-suave hover:text-texto hover:bg-superficie-sutil dark:hover:bg-white/[0.05]'
                   }`}
                 >
                   {ROTULO_PERIODO[p]}
@@ -335,15 +392,18 @@ export const DashboardModule: React.FC = () => {
         </div>
       </div>
 
-      {/* Row de 5 Cards de KPI (Estilo Metric) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
+      {/*
+        Fileira de KPIs. Os ícones vinham todos no tom 400, que é calibrado para fundo escuro:
+        no tema claro eles ficavam lavados contra o branco do card.
+      */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5 escalonar">
         <CardKPI
           rotulo="Projetos Aprovados"
           valor={kpis.projetosAprovados}
           badge={`+${taxaAprovacao}%`}
           badgeTom="positivo"
           legenda="Parecer de acesso emitido"
-          icone={<CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+          icone={<CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />}
         />
         <CardKPI
           rotulo="Em Análise Coelba"
@@ -351,7 +411,7 @@ export const DashboardModule: React.FC = () => {
           badge="15d prazo"
           badgeTom="info"
           legenda="Aguardando distribuidora"
-          icone={<Send className="w-4 h-4 text-sky-400" />}
+          icone={<Send className="w-4 h-4 text-sky-600 dark:text-sky-400" />}
         />
         <CardKPI
           rotulo="Pendências na Fila"
@@ -359,7 +419,7 @@ export const DashboardModule: React.FC = () => {
           badge={`${kpis.pendenciasResolvidas} resolvidas`}
           badgeTom="atencao"
           legenda="Troca titularidade e rede"
-          icone={<AlertTriangle className="w-4 h-4 text-amber-400" />}
+          icone={<AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />}
         />
         <CardKPI
           rotulo="Travados por Débito"
@@ -368,7 +428,7 @@ export const DashboardModule: React.FC = () => {
           badgeTom="critico"
           tom="critico"
           legenda="Clientes com fatura atrasada"
-          icone={<Flame className="w-4 h-4 text-rose-400" />}
+          icone={<Flame className="w-4 h-4 text-rose-600 dark:text-rose-400" />}
         />
         <CardKPI
           rotulo="Ciclo Médio Total"
@@ -377,139 +437,81 @@ export const DashboardModule: React.FC = () => {
           badge="Meta ≤ 35d"
           badgeTom="positivo"
           legenda="Entrada → Parecer aprovado"
-          icone={<TrendingUp className="w-4 h-4 text-emerald-400" />}
+          icone={<TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />}
         />
       </div>
 
-      {/* Seção Gráfica: Area Chart & Bar Chart (Metric Visual Homage) */}
+      {/* Seção Gráfica: ritmo do trâmite e distribuição por tipo */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Gráfico 1: Ritmo de Pareceres e Homologações (Area Line Chart) */}
+        {/* Gráfico 1: o que entrou e o que saiu do trâmite com a Coelba, ao longo do tempo */}
         <Card
           className="lg:col-span-2"
           title="Ritmo de Aprovações & Trâmite Coelba"
-          subtitle="Cadência semanal de pareceres emitidos e projetos protocolados no período"
+          subtitle={
+            ritmo?.granularidade === 'MES'
+              ? 'Pareceres emitidos e projetos protocolados, mês a mês'
+              : 'Pareceres emitidos e projetos protocolados, semana a semana'
+          }
           headerBorder={true}
+          action={
+            <span className="text-2xs text-texto-suave whitespace-nowrap">
+              <strong className="text-texto font-medium tabular-nums">
+                {kpis.projetosAprovados}
+              </strong>{' '}
+              aprovados de {projetosNoRecorte.length}
+            </span>
+          }
         >
-          <div className="space-y-4">
-            {/* Legend & Meta */}
-            <div className="flex items-center justify-between text-2xs text-texto-suave pb-1">
-              <div className="flex items-center gap-4">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-                  Pareceres Aprovados
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-0.5 bg-texto-apagado" />
-                  Meta Contratual
-                </span>
-              </div>
-              <span className="text-texto font-medium">
-                {kpis.projetosAprovados} aprovados / {projetosNoRecorte.length} total
-              </span>
+          {ritmo ? (
+            <GraficoLinhas
+              rotulos={ritmo.rotulos}
+              unidade="projetos"
+              series={[
+                {
+                  nome: 'Aprovados',
+                  cor: COR_SERIE.aprovado,
+                  valores: ritmo.aprovados,
+                  area: true,
+                },
+                {
+                  nome: 'Encaminhados',
+                  cor: COR_SERIE.encaminhado,
+                  valores: ritmo.encaminhados,
+                },
+              ]}
+            />
+          ) : (
+            <div className="flex h-44 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-borda text-center px-6">
+              <p className="text-xs font-medium text-texto">Nada protocolado ainda</p>
+              <p className="text-2xs text-texto-apagado">
+                A linha aparece assim que o primeiro projeto for encaminhado à Coelba.
+              </p>
             </div>
-
-            {/* Minimalist SVG Chart (Linha iluminada com degradê sutil no escuro) */}
-            <div className="relative h-44 w-full">
-              <svg className="w-full h-full overflow-visible" viewBox="0 0 500 160" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="metricGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#10B981" stopOpacity="0.28" />
-                    <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
-                  </linearGradient>
-                </defs>
-
-                {/* Linhas de grade horizontais minimalistas */}
-                <line x1="0" y1="30" x2="500" y2="30" stroke="currentColor" strokeOpacity="0.08" strokeDasharray="3 3" />
-                <line x1="0" y1="75" x2="500" y2="75" stroke="currentColor" strokeOpacity="0.08" strokeDasharray="3 3" />
-                <line x1="0" y1="120" x2="500" y2="120" stroke="currentColor" strokeOpacity="0.08" strokeDasharray="3 3" />
-
-                {/* Área preenchida */}
-                <path
-                  d="M 0,140 Q 60,110 120,95 T 240,115 T 360,50 T 500,25 L 500,160 L 0,160 Z"
-                  fill="url(#metricGradient)"
-                />
-
-                {/* Linha nítida principal (branca no escuro com brilho esmeralda) */}
-                <path
-                  d="M 0,140 Q 60,110 120,95 T 240,115 T 360,50 T 500,25"
-                  fill="none"
-                  stroke="#10B981"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                />
-
-                {/* Pontos de dados */}
-                {[
-                  { cx: 120, cy: 95, val: Math.round(kpis.projetosAprovados * 0.25) },
-                  { cx: 240, cy: 115, val: Math.round(kpis.projetosAprovados * 0.45) },
-                  { cx: 360, cy: 50, val: Math.round(kpis.projetosAprovados * 0.75) },
-                  { cx: 500, cy: 25, val: kpis.projetosAprovados },
-                ].map((pt, i) => (
-                  <g key={i}>
-                    <circle cx={pt.cx} cy={pt.cy} r="4" fill="#FFFFFF" stroke="#10B981" strokeWidth="2" />
-                  </g>
-                ))}
-              </svg>
-            </div>
-
-            {/* X-Axis labels */}
-            <div className="flex items-center justify-between text-2xs text-texto-apagado pt-1 border-t border-borda dark:border-white/[0.04]">
-              <span>Semana 1</span>
-              <span>Semana 2</span>
-              <span>Semana 3</span>
-              <span>Semana 4</span>
-              <span className="text-texto font-medium">Ciclo Atual</span>
-            </div>
-          </div>
+          )}
         </Card>
 
-        {/* Gráfico 2: Usuários / Tipos de Projeto (Bar Chart Vertical Minimalista) */}
+        {/*
+          Gráfico 2: distribuição por tipo. Barras deitadas porque os rótulos são longos
+          ("Ampliação de Projeto Existente") e em coluna eram cortados; uma cor só porque
+          categoria nominal não tem ordem — o tamanho da barra já diz quem é maior.
+        */}
         <Card
           className="lg:col-span-1"
           title="Projetos por Tipo"
           subtitle="Volume consolidado no funil"
           headerBorder={true}
         >
-          <div className="space-y-4">
-            <div className="h-44 flex items-end justify-around gap-4 pt-4 pb-2 px-2">
-              {contagemTipos.map((item, idx) => {
-                const perc = Math.round((item.quantidade / maxQtdTipo) * 100);
-                const alturaMin = Math.max(perc, 12);
-
-                return (
-                  <div key={idx} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
-                    <span className="text-xs font-semibold text-texto tabular-nums">
-                      {item.quantidade}
-                    </span>
-                    <div className="w-full max-w-[42px] bg-superficie-sutil rounded-t-md overflow-hidden flex items-end h-full">
-                      <div
-                        className={`w-full rounded-t-md transition-all duration-700 ${
-                          idx === 0
-                            ? 'bg-white dark:bg-zinc-100'
-                            : idx === 1
-                            ? 'bg-emerald-500'
-                            : 'bg-zinc-400 dark:bg-zinc-600'
-                        }`}
-                        style={{ height: `${alturaMin}%` }}
-                        title={`${item.label}: ${item.quantidade}`}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="grid grid-cols-3 gap-1 pt-2 border-t border-borda dark:border-white/[0.04] text-center">
-              {contagemTipos.map((item, idx) => (
-                <div key={idx} className="truncate">
-                  <div className="text-[11px] font-medium text-texto truncate">{item.label}</div>
-                  <div className="text-[10px] text-texto-apagado">{item.quantidade} un.</div>
-                </div>
-              ))}
-            </div>
+          <div className="space-y-5">
+            <GraficoBarrasHorizontais
+              itens={contagemTipos.map(item => ({
+                rotulo: item.label,
+                valor: item.quantidade,
+                dica: `${item.label}: ${item.quantidade} projeto(s)`,
+              }))}
+            />
 
             <div className="p-2.5 rounded-lg bg-superficie-sutil border border-borda dark:border-transparent text-2xs text-texto-suave flex items-center gap-2">
-              <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <Layers className="w-3.5 h-3.5 text-solar-primary dark:text-emerald-400 shrink-0" />
               <span>Os três subtipos compartilham o mesmo ciclo de vida.</span>
             </div>
           </div>
@@ -521,26 +523,30 @@ export const DashboardModule: React.FC = () => {
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold text-texto tracking-tight flex items-center gap-2">
-              <Clock className="w-4 h-4 text-emerald-400" />
+              <Clock className="w-4 h-4 text-solar-primary dark:text-emerald-400" />
               Tempos Médios de Ciclo de Vida (SLA por Etapa)
             </h3>
             <p className="text-2xs text-texto-suave">
               Calculados a partir do histórico de transição de status (auditoria de eventos)
             </p>
           </div>
-          <span className="text-2xs font-medium text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full">
+          <span className="text-2xs font-medium text-solar-700 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full">
             Tempo Real
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 escalonar">
           {metricasTempo.map((item, index) => {
             const Icone = item.icone;
             return (
-              <Card key={index} className="p-4" noPadding={true}>
+              <Card
+                key={index}
+                className="p-4 elevar-no-hover hover:border-borda-forte dark:hover:bg-superficie-elevada"
+                noPadding={true}
+              >
                 <div className="flex items-start justify-between">
                   <div className="w-8 h-8 rounded-xl bg-superficie-sutil border border-borda dark:border-transparent flex items-center justify-center text-texto-suave">
-                    <Icone className="w-4 h-4 text-emerald-400" />
+                    <Icone className="w-4 h-4 text-solar-primary dark:text-emerald-400" />
                   </div>
                   <span className="text-[11px] font-medium text-texto-suave bg-superficie-sutil border border-borda dark:border-transparent px-2 py-0.5 rounded-md">
                     {item.meta}
@@ -579,7 +585,9 @@ export const DashboardModule: React.FC = () => {
           subtitle="Últimos projetos em movimentação na concessionária"
           headerBorder={true}
         >
-          <div className="overflow-x-auto -mx-6 -my-6">
+          {/* `rounded-b-card` porque o `-my-6` faz a tabela encostar na borda do card: sem
+              isto a última linha desenha um canto quadrado sobre o canto arredondado. */}
+          <div className="overflow-x-auto -mx-6 -my-6 rounded-b-card">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-borda dark:border-white/[0.04] bg-superficie-sutil text-texto-apagado">
@@ -599,7 +607,11 @@ export const DashboardModule: React.FC = () => {
                   </tr>
                 ) : (
                   projetosRecentes.map(p => (
-                    <tr key={p.id} className="hover:bg-white/[0.02] transition-colors">
+                    // `hover:bg-white/[0.02]` era invisível no claro: branco sobre branco.
+                    <tr
+                      key={p.id}
+                      className="hover:bg-superficie-sutil dark:hover:bg-white/[0.03] transition-colors duration-120"
+                    >
                       <td className="py-3 px-6">
                         <div className="font-medium text-texto">{p.cliente.nome}</div>
                         <div className="text-2xs text-texto-apagado">
@@ -634,44 +646,59 @@ export const DashboardModule: React.FC = () => {
           headerBorder={true}
         >
           <div className="space-y-3.5">
+            {cargaAnalistas.length === 0 && (
+              <p className="text-2xs text-texto-apagado py-6 text-center">
+                Nenhum projeto atribuído no recorte atual.
+              </p>
+            )}
             {cargaAnalistas.map((item, idx) => {
               const percAprov = Math.round((item.aprovados / (item.total || 1)) * 100);
               return (
-                <div key={idx} className="p-3 rounded-xl bg-superficie-sutil border border-borda dark:border-transparent space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-emerald-950/80 text-emerald-300 flex items-center justify-center text-[10px] font-medium">
+                <div
+                  key={idx}
+                  className="p-3 rounded-xl bg-superficie-sutil border border-borda dark:border-transparent space-y-2 transition-colors duration-180 hover:border-borda-forte"
+                >
+                  <div className="flex items-center justify-between text-xs gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-6 h-6 shrink-0 rounded-full bg-solar-100 dark:bg-emerald-950/80 text-solar-800 dark:text-emerald-300 flex items-center justify-center text-[10px] font-semibold">
                         {item.analista.charAt(0)}
                       </div>
-                      <span className="font-medium text-texto">{item.analista}</span>
+                      <span className="font-medium text-texto truncate">{item.analista}</span>
                     </div>
-                    <div className="text-texto-apagado text-2xs">
-                      <strong className="text-texto font-semibold">{item.total}</strong> projetos
+                    <div className="text-texto-apagado text-2xs shrink-0">
+                      <strong className="text-texto font-semibold tabular-nums">
+                        {item.total}
+                      </strong>{' '}
+                      projetos
                     </div>
                   </div>
 
-                  {/* Barra de Progresso Minimalista */}
-                  <div className="w-full bg-superficie h-2 rounded-full overflow-hidden flex border border-borda dark:border-transparent">
-                    <div
-                      className="bg-emerald-400 h-full transition-all duration-500"
-                      style={{ width: `${percAprov}%` }}
-                      title={`Aprovados: ${percAprov}%`}
-                    />
-                    <div
-                      className="bg-amber-400 h-full transition-all duration-500"
-                      style={{ width: `${100 - percAprov}%` }}
-                      title={`Em andamento: ${100 - percAprov}%`}
-                    />
-                  </div>
+                  {/*
+                    Uma cor sobre trilho neutro, e não verde contra âmbar como era antes: esse
+                    par tem separação de apenas 3,1 em deuteranopia, ou seja, a barra inteira
+                    vira um bloco só para quem não distingue verde de vermelho — e a barra é
+                    justamente o que se olha antes de ler os números.
+                  */}
+                  <Medidor
+                    percentual={percAprov}
+                    rotulo={`${item.analista}: ${percAprov}% aprovados`}
+                  />
 
                   <div className="flex items-center justify-between text-2xs text-texto-suave">
-                    <span className="flex items-center gap-1 text-emerald-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                      {item.aprovados} Aprovados ({percAprov}%)
+                    <span className="inline-flex items-center gap-1.5">
+                      <span
+                        aria-hidden="true"
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        style={{ backgroundColor: COR_SERIE.aprovado }}
+                      />
+                      {item.aprovados} aprovados ({percAprov}%)
                     </span>
-                    <span className="flex items-center gap-1 text-amber-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                      {item.emAndamento} Em análise
+                    <span className="inline-flex items-center gap-1.5">
+                      <span
+                        aria-hidden="true"
+                        className="w-1.5 h-1.5 rounded-full shrink-0 bg-texto-apagado"
+                      />
+                      {item.emAndamento} em análise
                     </span>
                   </div>
                 </div>

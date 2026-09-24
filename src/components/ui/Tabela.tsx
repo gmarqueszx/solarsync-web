@@ -16,7 +16,9 @@ export const Tabela: React.FC<{ children: React.ReactNode; className?: string }>
   className,
 }) => (
   // -mx-6 -my-6 desfaz o padding do Card: a tabela encosta na borda, como painel de dados.
-  <div className={cn('overflow-x-auto -mx-6 -my-6', className)}>
+  // `rounded-b-card` porque, encostando, a última linha desenharia um canto quadrado por cima
+  // do canto arredondado do card.
+  <div className={cn('overflow-x-auto -mx-6 -my-6 rounded-b-card', className)}>
     <table className="w-full text-left border-collapse text-xs">{children}</table>
   </div>
 );
@@ -97,7 +99,14 @@ export const Linha: React.FC<{ children: React.ReactNode; className?: string }> 
   children,
   className,
 }) => (
-  <tr className={cn('hover:bg-superficie-sutil dark:hover:bg-white/[0.03] transition-colors', className)}>{children}</tr>
+  <tr
+    className={cn(
+      'hover:bg-superficie-sutil dark:hover:bg-white/[0.03] transition-colors duration-120',
+      className,
+    )}
+  >
+    {children}
+  </tr>
 );
 
 export const Td: React.FC<{

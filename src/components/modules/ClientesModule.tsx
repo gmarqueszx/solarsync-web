@@ -2,6 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   Cliente,
+  DadosPrioridade,
+  MOTIVOS_PRIORIDADE,
+  MotivoPrioridade,
+  ROTULO_MOTIVO_PRIORIDADE,
   ROTULO_STATUS_TRIAGEM,
   ROTULO_TIPO_DEBITO,
   ROTULO_TIPO_PENDENCIA,
@@ -16,6 +20,7 @@ import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { ClienteModal } from '../common/ClienteModal';
+import { SelosCliente } from '../common/SelosCliente';
 import {
   Search,
   Plus,
@@ -31,6 +36,9 @@ import {
   RotateCcw,
   ChevronLeft,
   ChevronRight,
+  ArrowUp,
+  ArrowDownToLine,
+  Flag,
 } from 'lucide-react';
 import { useOrdenacao } from '../../hooks/useOrdenacao';
 import { Ordenavel } from '../ui/Tabela';
@@ -40,10 +48,12 @@ const ouNulo = (valor: string): string | null => (valor.trim() === '' ? null : v
 
 type Filtro =
   | 'TODOS'
+  | 'PRIORITARIOS'
   | 'AGUARDANDO_VERIFICACAO'
   | 'COM_PENDENCIA'
   | 'SEM_PENDENCIA'
   | 'FALTA_CONSULTAR_DEBITO'
+  | 'SOMENTE_PENDENCIA'
   | 'SEM_UC'
   | 'SEM_DATA_PAGAMENTO';
 
@@ -90,6 +100,8 @@ export const ClientesModule: React.FC = () => {
     unificacoes,
     marcarSemPendencia,
     reverificarCliente,
+    marcarPrioridade,
+    removerPrioridade,
     criarPendencia,
     registrarConsultaDebito,
   } = useApp();
@@ -100,9 +112,13 @@ export const ClientesModule: React.FC = () => {
   const itensPorPagina = 8;
 
   // Abre pela fila da triagem: quem ninguém checou ainda é o que esta tela existe para pegar.
+  // A âncora de prioridade vem antes da coluna escolhida, sempre: é a regra "o cliente
+  // prioritário aparece no topo da etapa em que estiver", e ela não pode depender de qual coluna
+  // alguém clicou por último. O backend faz o mesmo na consulta (`PrioridadePrimeiro`).
   const { ordenacao, ordenar, cabecalho } = useOrdenacao<Cliente, ColunaCliente>(
     VALORES_ORDENAVEIS,
     { campo: 'triagem', direcao: 'asc' },
+    (c) => c.prioridade,
   );
 
   const [isModalAberto, setIsModalAberto] = useState(false);
@@ -116,6 +132,15 @@ export const ClientesModule: React.FC = () => {
   const [responsavelId, setResponsavelId] = useState<number | ''>('');
   const [observacaoPendencia, setObservacaoPendencia] = useState('');
   const [salvandoPendencia, setSalvandoPendencia] = useState(false);
+
+  // Modal: Prioridade do cliente
+  const [isModalPrioridadeAberto, setIsModalPrioridadeAberto] = useState(false);
+  const [clienteParaPrioridade, setClienteParaPrioridade] = useState<Cliente | null>(null);
+  const [motivoPrioridade, setMotivoPrioridade] =
+    useState<MotivoPrioridade>('INSTALACAO_ADIANTADA');
+  const [observacaoPrioridade, setObservacaoPrioridade] = useState('');
+  const [dataInstalacaoPrioridade, setDataInstalacaoPrioridade] = useState('');
+  const [salvandoPrioridade, setSalvandoPrioridade] = useState(false);
 
   // Modal: Registrar consulta de débito diretamente da triagem
   const [isModalDebitoAberto, setIsModalDebitoAberto] = useState(false);
@@ -162,6 +187,45 @@ export const ClientesModule: React.FC = () => {
     }
   };
 
+  const abrirModalPrioridade = (cliente: Cliente) => {
+    setClienteParaPrioridade(cliente);
+    // Reabre no que já estava valendo: revisar uma prioridade é o caso mais comum depois de
+    // criá-la, e obrigar a redigitar o motivo convidaria a trocá-lo por engano.
+    setMotivoPrioridade(cliente.prioridadeMotivo ?? 'INSTALACAO_ADIANTADA');
+    setObservacaoPrioridade(cliente.prioridadeObservacao ?? '');
+    setDataInstalacaoPrioridade(cliente.prioridadeDataInstalacao ?? '');
+    setIsModalPrioridadeAberto(true);
+  };
+
+  /**
+   * A data só é exigida quando o motivo é a instalação — é a regra do backend (409
+   * `PRIORIDADE_SEM_INSTALACAO`), antecipada aqui para o formulário não deixar enviar o que vai
+   * voltar recusado.
+   */
+  const exigeDataInstalacao = motivoPrioridade === 'INSTALACAO_ADIANTADA';
+
+  const handleSalvarPrioridade = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clienteParaPrioridade) return;
+    if (exigeDataInstalacao && dataInstalacaoPrioridade === '') return;
+
+    setSalvandoPrioridade(true);
+    try {
+      const dados: DadosPrioridade = {
+        motivo: motivoPrioridade,
+        observacao: ouNulo(observacaoPrioridade),
+        dataInstalacao: exigeDataInstalacao ? dataInstalacaoPrioridade : null,
+      };
+      await marcarPrioridade(clienteParaPrioridade.id, dados);
+      setIsModalPrioridadeAberto(false);
+      setClienteParaPrioridade(null);
+    } catch {
+      // O AppContext exibe o toast de erro da API
+    } finally {
+      setSalvandoPrioridade(false);
+    }
+  };
+
   const abrirModalDebito = (cliente: Cliente) => {
     setClienteParaDebito(cliente);
     // Já abre no tipo que falta: se as duas faltam, começa pela etapa 1, que vem antes no fluxo.
@@ -205,7 +269,7 @@ export const ClientesModule: React.FC = () => {
 
     pendencias.forEach((p) => {
       const l = linha(p.cliente.id);
-      if (p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO') l.pendenciasAbertas += 1;
+      if (p.status === 'ABERTA') l.pendenciasAbertas += 1;
     });
     projetos.forEach((p) => {
       const l = linha(p.cliente.id);
@@ -237,6 +301,25 @@ export const ClientesModule: React.FC = () => {
     [tiposFaltando],
   );
 
+  /**
+   * O cliente de fluxo curto já terminou? Derivado das pendências que a tela já carrega, e não
+   * de um campo do servidor: exigir esse cálculo na API custaria uma contagem por linha da
+   * listagem para responder algo que aqui é uma varredura de lista em memória.
+   *
+   * "Concluído" é ter tido pendência e não ter nenhuma aberta — o mesmo que o requisito descreve
+   * como "entrada → pendência → pendência resolvida → fluxo concluído".
+   */
+  const fluxoAvulsoConcluido = useMemo(() => {
+    const abertas = new Set<number>();
+    const tiveram = new Set<number>();
+    pendencias.forEach((p) => {
+      tiveram.add(p.cliente.id);
+      if (p.status === 'ABERTA') abertas.add(p.cliente.id);
+    });
+    return (cliente: Cliente) =>
+      cliente.somentePendencia && tiveram.has(cliente.id) && !abertas.has(cliente.id);
+  }, [pendencias]);
+
   const clientesFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
     return ordenar(clientes.filter((c) => {
@@ -250,6 +333,8 @@ export const ClientesModule: React.FC = () => {
 
       const matchFiltro =
         filtro === 'TODOS' ||
+        (filtro === 'PRIORITARIOS' && c.prioridade) ||
+        (filtro === 'SOMENTE_PENDENCIA' && c.somentePendencia) ||
         (filtro === 'FALTA_CONSULTAR_DEBITO' && faltaConsultarDebito(c.id)) ||
         (filtro === 'SEM_UC' && !c.ucCoelba) ||
         (filtro === 'SEM_DATA_PAGAMENTO' && !c.dataPagamento) ||
@@ -269,13 +354,14 @@ export const ClientesModule: React.FC = () => {
   const aguardandoVerificacao = clientes.filter(
     (c) => c.statusTriagem === 'AGUARDANDO_VERIFICACAO',
   ).length;
+  const prioritarios = clientes.filter((c) => c.prioridade).length;
   const aguardandoConsultaDebito = clientes.filter((c) => faltaConsultarDebito(c.id)).length;
   const semUc = clientes.filter((c) => !c.ucCoelba).length;
 
   return (
     <div className="space-y-5">
       {/* Overview Stat Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <button
           onClick={() => {
             setFiltro('AGUARDANDO_VERIFICACAO');
@@ -296,6 +382,29 @@ export const ClientesModule: React.FC = () => {
           </div>
           <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
             <SearchCheck className="w-5 h-5" />
+          </div>
+        </button>
+
+        <button
+          onClick={() => {
+            setFiltro('PRIORITARIOS');
+            setPagina(1);
+          }}
+          className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between text-left hover:border-[#149911] transition-colors"
+        >
+          <div>
+            {/*
+              Os adiantados. Aparecem no topo da fila de toda etapa em que estiverem — este card
+              é o caminho para revisar se cada um ainda merece estar lá.
+            */}
+            <span className="text-xs text-[#424342]">Clientes Prioritários</span>
+            <div className="text-xl font-semibold text-amber-800 mt-1">
+              {prioritarios} clientes
+            </div>
+            <span className="text-[11px] text-[#424342]">no topo de todas as filas</span>
+          </div>
+          <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+            <ArrowUp className="w-5 h-5" />
           </div>
         </button>
 
@@ -371,6 +480,8 @@ export const ClientesModule: React.FC = () => {
             className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-sm"
           >
             <option value="TODOS">Todos os clientes</option>
+            <option value="PRIORITARIOS">Prioritários</option>
+            <option value="SOMENTE_PENDENCIA">Fluxo somente pendência</option>
             <option value="AGUARDANDO_VERIFICACAO">Falta checar na Coelba</option>
             <option value="COM_PENDENCIA">Checados — com pendência</option>
             <option value="SEM_PENDENCIA">Checados — sem pendência</option>
@@ -436,7 +547,10 @@ export const ClientesModule: React.FC = () => {
                   return (
                     <tr key={c.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-3.5 px-6">
-                        <div className="font-medium text-slate-800">{c.nome}</div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-medium text-slate-800">{c.nome}</span>
+                          <SelosCliente cliente={c} />
+                        </div>
                         <div className="text-[11px] text-[#424342] mt-0.5">
                           {c.ucCoelba ? (
                             <>UC: {c.ucCoelba}</>
@@ -523,7 +637,14 @@ export const ClientesModule: React.FC = () => {
                       </td>
                       <td className="py-3.5 px-4">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          {!movimento ? (
+                          {fluxoAvulsoConcluido(c) ? (
+                            /*
+                              O fim da linha do cliente avulso. Precisa de rótulo próprio: sem
+                              ele, "nenhuma pendência aberta e nenhum projeto" é indistinguível
+                              de "ninguém fez nada" — que é o oposto do que aconteceu.
+                            */
+                            <Badge variant="success">Fluxo concluído</Badge>
+                          ) : !movimento ? (
                             <Badge variant="neutral">Sem movimento</Badge>
                           ) : (
                             <>
@@ -551,6 +672,30 @@ export const ClientesModule: React.FC = () => {
                       </td>
                       <td className="py-3.5 px-6 text-right">
                         <div className="inline-flex items-center gap-1">
+                          <button
+                            onClick={() => abrirModalPrioridade(c)}
+                            className={
+                              c.prioridade
+                                ? 'p-1.5 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors'
+                                : 'p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors'
+                            }
+                            title={
+                              c.prioridade
+                                ? 'Revisar a prioridade deste cliente'
+                                : 'Solicitar prioridade: o cliente passa a aparecer no topo da fila da etapa em que estiver'
+                            }
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          {c.prioridade && (
+                            <button
+                              onClick={() => removerPrioridade(c.id).catch(() => {})}
+                              className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors"
+                              title="Encerrar a prioridade (a data de instalação já registrada permanece)"
+                            >
+                              <ArrowDownToLine className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             onClick={() => abrirModalPendencia(c)}
                             className="p-1.5 text-amber-700 hover:text-amber-900 hover:bg-amber-50 rounded-lg transition-colors"
@@ -618,6 +763,128 @@ export const ClientesModule: React.FC = () => {
         onClose={() => setIsModalAberto(false)}
         clienteEmEdicao={clienteEmEdicao}
       />
+
+      {/* Modal: Prioridade do cliente */}
+      <Modal
+        isOpen={isModalPrioridadeAberto}
+        onClose={() => setIsModalPrioridadeAberto(false)}
+        title={
+          clienteParaPrioridade?.prioridade ? 'Revisar Prioridade' : 'Solicitar Prioridade'
+        }
+        subtitle={
+          clienteParaPrioridade
+            ? `Cliente: ${clienteParaPrioridade.nome}`
+            : 'Adiantar o cliente na fila'
+        }
+        maxWidth="lg"
+        footer={
+          <>
+            {clienteParaPrioridade?.prioridade && (
+              <button
+                type="button"
+                onClick={() => {
+                  removerPrioridade(clienteParaPrioridade.id).catch(() => {});
+                  setIsModalPrioridadeAberto(false);
+                }}
+                className="px-3.5 py-2 text-xs font-medium text-rose-700 hover:bg-rose-50 rounded-xl transition-colors mr-auto"
+              >
+                Encerrar prioridade
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsModalPrioridadeAberto(false)}
+              className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              form="form-prioridade"
+              disabled={salvandoPrioridade}
+              className="px-3.5 py-2 bg-[#149911] hover:bg-[#256D1B] disabled:opacity-60 text-white text-xs font-medium rounded-xl transition-colors"
+            >
+              {salvandoPrioridade ? 'Salvando...' : 'Salvar prioridade'}
+            </button>
+          </>
+        }
+      >
+        <form id="form-prioridade" onSubmit={handleSalvarPrioridade} className="space-y-4 text-xs">
+          <div>
+            <label className="font-medium text-slate-700 block mb-1" htmlFor="prioridade-motivo">
+              Motivo da prioridade
+            </label>
+            <select
+              id="prioridade-motivo"
+              value={motivoPrioridade}
+              onChange={(e) => setMotivoPrioridade(e.target.value as MotivoPrioridade)}
+              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911]"
+            >
+              {MOTIVOS_PRIORIDADE.map((motivo) => (
+                <option key={motivo} value={motivo}>
+                  {ROTULO_MOTIVO_PRIORIDADE[motivo]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/*
+            A data só aparece no motivo que a usa. Ela não é um segundo campo de data de
+            instalação: vai para o projeto do cliente (`dataInstalacao`), que é o campo que a
+            etapa de vistoria lê e exige — se o projeto ainda não existir, ela espera e o projeto
+            nasce já sabendo dela.
+          */}
+          {exigeDataInstalacao && (
+            <div>
+              <label
+                className="font-medium text-slate-700 block mb-1"
+                htmlFor="prioridade-instalacao"
+              >
+                Data em que o cliente foi instalado <span className="text-rose-600">*</span>
+              </label>
+              <input
+                id="prioridade-instalacao"
+                type="date"
+                required
+                value={dataInstalacaoPrioridade}
+                onChange={(e) => setDataInstalacaoPrioridade(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911]"
+              />
+              <p className="text-[11px] text-[#424342] mt-1">
+                Vai direto para o projeto deste cliente. Quando ele for aprovado e cair na fila da
+                Vistoria, a data já estará lá — e é ela que destrava a solicitação.
+              </p>
+            </div>
+          )}
+
+          <div>
+            <label
+              className="font-medium text-slate-700 block mb-1"
+              htmlFor="prioridade-observacao"
+            >
+              Observação
+            </label>
+            <textarea
+              id="prioridade-observacao"
+              rows={3}
+              maxLength={500}
+              value={observacaoPrioridade}
+              onChange={(e) => setObservacaoPrioridade(e.target.value)}
+              placeholder="O que levou ao pedido — prazo, obra, combinação com o cliente..."
+              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#149911]"
+            />
+          </div>
+
+          <div className="text-[11px] text-[#424342] bg-amber-50 p-2.5 rounded-lg border border-amber-100 flex gap-2">
+            <Flag className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
+            <span>
+              O cliente prioritário aparece no <strong>topo da fila da etapa em que estiver</strong>{' '}
+              — triagem, pendência, débito, projeto, vistoria ou unificação — e continua no topo
+              quando avançar para a próxima. Some da frente só quando a prioridade for encerrada.
+            </span>
+          </div>
+        </form>
+      </Modal>
 
       {/* Modal: Apontar Pendência na Coelba */}
       <Modal

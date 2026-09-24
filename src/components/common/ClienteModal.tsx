@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Cliente, DadosCliente } from '../../types';
 import { Modal } from './Modal';
-import { VENDEDORES_PADRAO, MUNICIPIOS_BAHIA } from '../../data/constantes';
 import { AlertCircle, UserCheck } from 'lucide-react';
 
 interface ClienteModalProps {
@@ -21,6 +20,8 @@ const FORMULARIO_VAZIO: DadosCliente = {
   dataPagamento: null,
   ucCoelba: null,
   telefone: null,
+  somentePendencia: false,
+  banco: false,
 };
 
 const ouNulo = (v: string): string | null => {
@@ -34,7 +35,13 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
   clienteEmEdicao,
   onSucesso,
 }) => {
-  const { criarCliente, atualizarCliente } = useApp();
+  /**
+   * As listas vêm do backend (`GET /api/referencias`), não mais de `src/data/constantes.ts`: é a
+   * mesma lista que a importação do Nectar usa para normalizar cidade e vendedor, e duas cópias
+   * divergiriam.
+   */
+  const { criarCliente, atualizarCliente, referencias } = useApp();
+  const { municipios, vendedores } = referencias;
   const [formulario, setFormulario] = useState<DadosCliente>(FORMULARIO_VAZIO);
   const [salvando, setSalvando] = useState(false);
   const [modoOutroVendedor, setModoOutroVendedor] = useState(false);
@@ -45,11 +52,26 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
     if (!isOpen) return;
 
     if (clienteEmEdicao) {
-      const { id: _id, statusTriagem: _st, ...dados } = clienteEmEdicao;
-      setFormulario(dados);
+      // `origem` e `nectarOportunidadeId` ficam de fora: são a procedência do registro, não
+      // campos editáveis — o PUT não os aceita.
+      // Só os campos do cadastro. Tudo o mais que o cliente carrega — triagem, procedência,
+      // etiquetas, prioridade — é estado do fluxo e muda por endpoint de ação, não por este
+      // formulário: corrigir um telefone não pode, de passagem, apagar uma prioridade nem o fato
+      // de a Coelba já ter sido consultada.
+      setFormulario({
+        nome: clienteEmEdicao.nome,
+        cidade: clienteEmEdicao.cidade,
+        vendedor: clienteEmEdicao.vendedor,
+        dataPagamento: clienteEmEdicao.dataPagamento,
+        ucCoelba: clienteEmEdicao.ucCoelba,
+        telefone: clienteEmEdicao.telefone,
+        somentePendencia: clienteEmEdicao.somentePendencia,
+        banco: clienteEmEdicao.banco,
+      });
+      const dados = clienteEmEdicao;
 
       // Checa se vendedor atual pertence à lista pré-definida
-      if (dados.vendedor && !VENDEDORES_PADRAO.includes(dados.vendedor as typeof VENDEDORES_PADRAO[number])) {
+      if (dados.vendedor && !vendedores.includes(dados.vendedor)) {
         setModoOutroVendedor(true);
         setOutroVendedorTexto(dados.vendedor);
       } else {
@@ -61,12 +83,14 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
       setModoOutroVendedor(false);
       setOutroVendedorTexto('');
     }
-  }, [isOpen, clienteEmEdicao]);
+    // `vendedores` entra porque a lista chega do servidor: sem ela, o modal aberto antes da
+    // carga trataria todo vendedor como "fora da lista".
+  }, [isOpen, clienteEmEdicao, vendedores]);
 
   const cidadeDigitada = (formulario.cidade ?? '').trim();
   const cidadeEhValidaBA =
     cidadeDigitada === '' ||
-    MUNICIPIOS_BAHIA.some((m) => m.toLowerCase() === cidadeDigitada.toLowerCase());
+    municipios.some((m) => m.toLowerCase() === cidadeDigitada.toLowerCase());
 
   const handleVendedorChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const valor = e.target.value;
@@ -220,7 +244,7 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
               }`}
             />
             <datalist id="municipios-bahia-list">
-              {MUNICIPIOS_BAHIA.map((m) => (
+              {municipios.map((m) => (
                 <option key={m} value={m} />
               ))}
             </datalist>
@@ -245,13 +269,13 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
               className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#149911]"
             >
               <option value="">Selecione o vendedor...</option>
-              {VENDEDORES_PADRAO.map((v) => (
+              {vendedores.map((v) => (
                 <option key={v} value={v}>
                   {v}
                 </option>
               ))}
               {formulario.vendedor &&
-                !VENDEDORES_PADRAO.includes(formulario.vendedor as typeof VENDEDORES_PADRAO[number]) &&
+                !vendedores.includes(formulario.vendedor) &&
                 !modoOutroVendedor && (
                   <option value={formulario.vendedor}>{formulario.vendedor} (atual)</option>
                 )}
@@ -285,6 +309,54 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
             }
             className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#149911]"
           />
+        </div>
+
+        {/*
+          Os dois desenham o fluxo do cliente, e por isso ficam no cadastro e não numa ação: são
+          decididos na entrada e valem do começo ao fim. Desmarcar "somente pendência" é o
+          caminho para devolver ao fluxo completo o avulso que virou projeto de verdade.
+        */}
+        <div className="space-y-2 pt-1">
+          <label className="flex items-start gap-2 cursor-pointer" htmlFor="cliente-so-pendencia">
+            <input
+              id="cliente-so-pendencia"
+              type="checkbox"
+              checked={formulario.somentePendencia}
+              onChange={(e) =>
+                setFormulario((f) => ({ ...f, somentePendencia: e.target.checked }))
+              }
+              className="mt-0.5 accent-[#149911]"
+            />
+            <span>
+              <span className="font-medium text-slate-700 dark:text-slate-200">
+                Fluxo somente pendência
+              </span>
+              <span className="block text-[11px] text-[#424342] dark:text-slate-300">
+                Cliente avulso: entrada → pendência → resolvida → fim. Nenhum projeto é criado
+                quando a pendência for resolvida, e ele não segue para encaminhamento nem
+                vistoria.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-2 cursor-pointer" htmlFor="cliente-banco">
+            <input
+              id="cliente-banco"
+              type="checkbox"
+              checked={formulario.banco}
+              onChange={(e) => setFormulario((f) => ({ ...f, banco: e.target.checked }))}
+              className="mt-0.5 accent-[#149911]"
+            />
+            <span>
+              <span className="font-medium text-slate-700 dark:text-slate-200">
+                Projeto Banco (financiamento)
+              </span>
+              <span className="block text-[11px] text-[#424342] dark:text-slate-300">
+                Vem marcado sozinho quando o cliente entra pela etapa de banco do Nectar. O fluxo
+                aqui é igual ao normal; muda a etapa para onde ele volta no CRM ao ser aprovado.
+              </span>
+            </span>
+          </label>
         </div>
 
         <div className="text-[11px] text-[#424342] dark:text-slate-300 bg-emerald-50/80 dark:bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-100 dark:border-emerald-800/50 space-y-1">

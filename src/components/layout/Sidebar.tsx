@@ -23,9 +23,7 @@ export const Sidebar: React.FC = () => {
     c => c.statusTriagem === 'AGUARDANDO_VERIFICACAO',
   ).length;
 
-  const pendenciasAtivas = pendencias.filter(
-    p => p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO',
-  ).length;
+  const pendenciasAtivas = pendencias.filter(p => p.status === 'ABERTA').length;
   /**
    * Clientes travados, não linhas de débito: com um registro por etapa, um cliente devendo nas
    * duas contaria duas vezes e o badge diria o dobro do trabalho que existe.
@@ -143,15 +141,27 @@ export const Sidebar: React.FC = () => {
       <button
         key={item.id}
         onClick={() => setModuloAtivo(item.id)}
-        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-left text-xs font-medium transition-all group ${
+        aria-current={isAtivo ? 'page' : undefined}
+        className={`relative w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-left text-xs font-medium group
+          transition-all duration-180 ease-suave active:scale-[0.98] ${
           isAtivo
             ? 'bg-solar-primary text-white dark:bg-white/10 dark:text-white'
             : 'text-white/75 hover:bg-white/10 hover:text-white dark:text-texto-suave dark:hover:text-white dark:hover:bg-white/[0.04]'
         }`}
       >
+        {/*
+          Filete que cresce à esquerda do item ativo. É o que dá continuidade à troca de módulo:
+          o fundo aparece de uma vez, mas o traço se estica, e o olho segue o traço.
+        */}
+        <span
+          aria-hidden="true"
+          className={`absolute left-0 top-1/2 -translate-y-1/2 w-0.5 rounded-r-full bg-[#1EFC1E] dark:bg-emerald-400
+            transition-all duration-320 ease-suave ${isAtivo ? 'h-5 opacity-100' : 'h-0 opacity-0'}`}
+        />
+
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon
-            className={`w-4 h-4 shrink-0 transition-colors ${
+            className={`w-4 h-4 shrink-0 transition-all duration-180 ease-suave group-hover:scale-110 ${
               isAtivo
                 ? 'text-white dark:text-emerald-400'
                 : 'text-white/60 group-hover:text-white dark:text-texto-apagado dark:group-hover:text-white'
@@ -162,7 +172,7 @@ export const Sidebar: React.FC = () => {
 
         {item.badge !== undefined && item.badge > 0 && (
           <span
-            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium tabular-nums shrink-0 transition-colors ${
+            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium tabular-nums shrink-0 transition-colors duration-180 ${
               isAtivo
                 ? 'bg-white/90 text-solar-sidebar dark:bg-emerald-500/20 dark:text-emerald-300'
                 : 'bg-black/25 text-white/85 group-hover:bg-black/40 dark:bg-white/[0.06] dark:text-texto-suave'

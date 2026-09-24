@@ -58,7 +58,12 @@ export const CardKPI: React.FC<{
         {icone && <span className="text-texto-apagado shrink-0">{icone}</span>}
       </div>
       <div className="mt-2.5 flex items-baseline gap-2 flex-wrap">
-        <span className={cn('text-2xl sm:text-3xl font-semibold tracking-tight tabular-nums text-texto', TONS[tom])}>
+        {/*
+          Sem `tabular-nums` no número grande: dígitos de largura fixa fazem "121" parecer
+          espaçado em corpo display. Alinhamento tabular é para coluna de tabela, e as colunas
+          continuam com ele.
+        */}
+        <span className={cn('text-2xl sm:text-3xl font-semibold tracking-tight text-texto', TONS[tom])}>
           {valor}
         </span>
         {sufixo && <span className="text-xs text-texto-suave font-normal">{sufixo}</span>}
@@ -78,11 +83,12 @@ export const CardKPI: React.FC<{
   );
 
   const classes = cn(
-    'bg-superficie rounded-card px-4 py-3.5 text-left transition-all border border-borda dark:border-transparent',
+    'bg-superficie rounded-card px-4 py-3.5 text-left border border-borda dark:border-transparent',
+    'elevar-no-hover hover:border-borda-forte dark:hover:border-white/[0.08]',
     ativo
       ? 'border-solar-primary dark:border-emerald-500 ring-1 ring-solar-primary/30 dark:ring-emerald-500/30'
       : '',
-    onClick && 'hover:bg-superficie-elevada cursor-pointer',
+    onClick && 'hover:bg-superficie-elevada cursor-pointer active:scale-[0.99]',
     className,
   );
 

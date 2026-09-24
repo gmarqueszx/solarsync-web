@@ -97,10 +97,44 @@ export function somarDiasISO(dias: number): string {
   return dataISO(data);
 }
 
-function dataISO(data: Date): string {
+export function dataISO(data: Date): string {
   const mes = String(data.getMonth() + 1).padStart(2, '0');
   const dia = String(data.getDate()).padStart(2, '0');
   return `${data.getFullYear()}-${mes}-${dia}`;
+}
+
+/**
+ * `2026-08-20` → um `Date` local ao **meio-dia**, e não à meia-noite UTC.
+ *
+ * É a mesma armadilha descrita no topo do arquivo, agora do lado de quem precisa calcular em
+ * vez de formatar: os gráficos do dashboard agrupam por semana, e um dia deslocado joga a data
+ * para o balde anterior. Meio-dia é o único horário que sobrevive a qualquer fuso do Brasil.
+ *
+ * Aceita instante também (`...T03:12Z`), que já carrega fuso e passa direto.
+ */
+export function dataDeISO(iso?: string | null): Date | null {
+  if (!iso) return null;
+  const data = iso.includes('T') ? new Date(iso) : new Date(`${iso}T12:00:00`);
+  return Number.isNaN(data.getTime()) ? null : data;
+}
+
+const DIA_MES = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
+const SO_MES = new Intl.DateTimeFormat('pt-BR', { month: 'short' });
+
+/** `20/08` — rótulo curto de eixo. */
+export function formatarDiaMes(data: Date): string {
+  return DIA_MES.format(data);
+}
+
+/**
+ * `ago/26` — rótulo curto de eixo quando o recorte passa de alguns meses.
+ *
+ * O mês e o ano são formatados separadamente porque o `Intl` em pt-BR junta os dois como
+ * "ago. de 26", que num eixo com doze colunas ocupa o dobro do espaço disponível.
+ */
+export function formatarMesAno(data: Date): string {
+  const mes = SO_MES.format(data).replace('.', '');
+  return `${mes}/${String(data.getFullYear()).slice(-2)}`;
 }
 
 /** `0` → "hoje", `1` → "há 1 dia", `12` → "há 12 dias". */

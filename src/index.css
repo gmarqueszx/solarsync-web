@@ -31,6 +31,9 @@
 
   --barra-rolagem: #cbd5e1;
   --barra-rolagem-hover: #94a3b8;
+
+  /** Anel de foco de teclado, usado por `:focus-visible` em toda a aplicação. */
+  --foco: #149911;
 }
 
 html.dark {
@@ -46,6 +49,8 @@ html.dark {
 
   --barra-rolagem: #1E2025;
   --barra-rolagem-hover: #2E3139;
+
+  --foco: #34D399;
 }
 
 @layer base {
@@ -56,6 +61,121 @@ html.dark {
     margin: 0;
     padding: 0;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Tabelas e KPIs ficam mais nítidos com as formas antigas de 0 e 1 desligadas. */
+    font-variant-ligatures: none;
+  }
+
+  /*
+    Um anel de foco só, em toda a aplicação. Antes cada componente inventava o seu (`ring-1`,
+    `ring-2`, `focus:border`, ou nenhum), e navegar por teclado dava a sensação de que o foco
+    tinha se perdido no meio da tela.
+  */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--foco);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /*
+    Transição padrão de tudo que reage ao ponteiro.
+
+    Os oito módulos somam mais de 130 estados `hover:` escritos à mão, e cerca de um em cada
+    cinco não tinha `transition` nenhuma — a cor trocava num quadro. Corrigir um a um daria uma
+    lista de 130 edições que a próxima tela esqueceria de novo.
+
+    ⚠️ O seletor está em `:where()`, que tem **especificidade zero**. É o que permite a qualquer
+    componente continuar declarando `transition-colors duration-300` e vencer sem `!important`;
+    fosse um seletor comum, este bloco disputaria com as utilitárias do Tailwind e o resultado
+    dependeria da ordem no CSS gerado.
+  */
+  :where(a, button, summary, tr, input, select, textarea, [role='button'], [role='tab']) {
+    transition-property: color, background-color, border-color, text-decoration-color, fill,
+      stroke, box-shadow, opacity, transform;
+    transition-duration: 160ms;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+
+/* ==========================================================================
+   Movimento
+   --------------------------------------------------------------------------
+   Fora da tela de login, o sistema não tinha movimento nenhum: quatro usos de
+   `animate-*` no projeto inteiro, todos pontuais. Trocar de módulo era um
+   corte seco, e a tabela aparecia pronta antes de o olho achar onde olhar.
+
+   O vocabulário está no `tailwind.config.js` (curvas, tempos e keyframes).
+   Aqui ficam as duas coisas que precisam de CSS de verdade: a cascata, que
+   depende de `nth-child`, e o respeito a quem pediu menos movimento.
+   ========================================================================== */
+
+/*
+  ⚠️ Os keyframes de `entrar-cartao` precisam estar aqui, e não só no `tailwind.config.js`.
+  O Tailwind só emite `@keyframes` de uma animação quando a utilitária `animate-*`
+  correspondente aparece no markup — e esta é usada por uma classe CSS (`.escalonar`), não por
+  uma utilitária. Declarada só no config, a regra referenciava um `@keyframes` inexistente e a
+  cascata simplesmente não acontecia, sem erro em lugar nenhum. Conferido no CSS compilado.
+*/
+@keyframes entrar-cartao {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@layer utilities {
+  /**
+   * Entrada em cascata para os filhos diretos de uma grade — a fileira de KPIs, os cards de
+   * SLA. O atraso é curto de propósito: passando de ~40ms por item a cascata deixa de ser
+   * ritmo e vira espera, e quem usa o painel dez vezes por dia paga essa espera dez vezes.
+   */
+  .escalonar > * {
+    animation: entrar-cartao 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .escalonar > *:nth-child(1)  { animation-delay: 0ms; }
+  .escalonar > *:nth-child(2)  { animation-delay: 40ms; }
+  .escalonar > *:nth-child(3)  { animation-delay: 80ms; }
+  .escalonar > *:nth-child(4)  { animation-delay: 120ms; }
+  .escalonar > *:nth-child(5)  { animation-delay: 160ms; }
+  .escalonar > *:nth-child(6)  { animation-delay: 200ms; }
+  .escalonar > *:nth-child(7)  { animation-delay: 220ms; }
+  .escalonar > *:nth-child(8)  { animation-delay: 240ms; }
+  .escalonar > *:nth-child(n + 9) { animation-delay: 260ms; }
+
+  /** Realce de superfície ao passar o ponteiro, sem mexer no layout. */
+  .elevar-no-hover {
+    transition:
+      transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      background-color 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .elevar-no-hover:hover {
+    transform: translateY(-1px);
+  }
+}
+
+/*
+  ⚠️ Guarda global, e não por componente. O bloco que existia cobria só `.tela-login`, então
+  todo movimento acrescentado fora dela passaria por cima da preferência do sistema — e a
+  pessoa que liga "reduzir movimento" costuma fazê-lo por enjoo, não por gosto.
+
+  `0.01ms` em vez de `none`: com `animation-fill-mode: both`, o estado final é aplicado na
+  hora. `animation: none` devolveria o elemento ao estado inicial — opacidade zero —, ou seja,
+  esconderia metade da interface de quem pediu menos movimento.
+*/
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -297,4 +417,109 @@ html.dark .bg-slate-900\/40,
 html.dark .bg-black\/50 {
   background-color: rgba(0, 0, 0, 0.8) !important;
   backdrop-filter: blur(4px);
+}
+
+/* ==========================================================================
+   Tela de login
+   --------------------------------------------------------------------------
+   Tudo aqui está escopado em `.tela-login` e não existe em nenhuma outra tela.
+   A login é o único momento do produto sem sidebar nem topbar, visto uma vez
+   por dia: ela carrega a marca, e por isso tem paleta própria (verde-quase-
+   preto e marfim quente, em vez do cinza de painel) em variáveis locais.
+
+   Os tokens de interface (`--superficie`, `--borda`, `--texto`) continuam
+   valendo para o resto; nada abaixo os altera.
+   ========================================================================== */
+
+.tela-login {
+  --login-tela: #F4F2EB;
+  --login-tinta: #14301A;
+  --login-tinta-suave: #4A5C4E;
+  --login-tinta-apagada: #7C8A7E;
+  --login-vidro: rgba(255, 255, 255, 0.78);
+  --login-vidro-borda: rgba(20, 48, 26, 0.12);
+  --login-campo: rgba(255, 255, 255, 0.92);
+  --login-campo-borda: rgba(20, 48, 26, 0.14);
+  --login-linha: rgba(20, 153, 17, 0.28);
+  --login-malha: rgba(20, 48, 26, 0.06);
+  /* O halo é o sol: verde da marca embaixo à esquerda, calor de fim de tarde em cima. */
+  --login-halo-1: rgba(30, 252, 30, 0.20);
+  --login-halo-2: rgba(255, 186, 74, 0.20);
+  --login-sombra:
+    0 40px 90px -40px rgba(16, 44, 22, 0.45),
+    0 2px 8px -2px rgba(16, 44, 22, 0.10);
+}
+
+html.dark .tela-login {
+  --login-tela: #06100A;
+  --login-tinta: #ECF4EA;
+  --login-tinta-suave: rgba(236, 244, 234, 0.64);
+  --login-tinta-apagada: rgba(236, 244, 234, 0.42);
+  --login-vidro: rgba(255, 255, 255, 0.045);
+  --login-vidro-borda: rgba(255, 255, 255, 0.10);
+  --login-campo: rgba(255, 255, 255, 0.045);
+  --login-campo-borda: rgba(255, 255, 255, 0.12);
+  --login-linha: rgba(30, 252, 30, 0.18);
+  --login-malha: rgba(255, 255, 255, 0.05);
+  --login-halo-1: rgba(20, 153, 17, 0.34);
+  --login-halo-2: rgba(30, 252, 30, 0.08);
+  --login-sombra: 0 50px 110px -40px rgba(0, 0, 0, 0.85);
+}
+
+/* Luz: dois halos radiais, o sol baixo à esquerda e o calor difuso no alto. */
+.login-halo {
+  background-image:
+    radial-gradient(58rem 44rem at 10% 92%, var(--login-halo-1), transparent 62%),
+    radial-gradient(46rem 36rem at 82% 6%, var(--login-halo-2), transparent 60%);
+}
+
+/* Grade: a malha do painel fotovoltaico, esmaecida para as bordas. */
+.login-malha {
+  background-image:
+    linear-gradient(var(--login-malha) 1px, transparent 1px),
+    linear-gradient(90deg, var(--login-malha) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(75% 65% at 30% 60%, #000 0%, transparent 100%);
+  mask-image: radial-gradient(75% 65% at 30% 60%, #000 0%, transparent 100%);
+}
+
+/* Grão: tira o aspecto de degradê chapado de renderização. */
+.login-grao {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='r'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23r)'/%3E%3C/svg%3E");
+  opacity: 0.22;
+  mix-blend-mode: soft-light;
+}
+
+html.dark .login-grao {
+  opacity: 0.16;
+  mix-blend-mode: overlay;
+}
+
+/*
+  O bloco de compatibilidade acima força `html.dark input { background: var(--superficie-sutil) }`
+  com `!important`, que sobre o vidro da login apareceria como um retângulo cinza de painel.
+  Aqui a especificidade é maior (`.dark` + `.tela-login`), então o campo volta a ser vidro.
+*/
+html.dark .tela-login input:not([type="checkbox"]):not([type="radio"]) {
+  background-color: var(--login-campo) !important;
+  border-color: var(--login-campo-borda) !important;
+  color: var(--login-tinta) !important;
+}
+
+html.dark .tela-login input:not([type="checkbox"]):not([type="radio"]):focus {
+  border-color: rgba(30, 252, 30, 0.45) !important;
+  box-shadow: 0 0 0 3px rgba(20, 153, 17, 0.28) !important;
+}
+
+html.dark .tela-login input::placeholder {
+  color: var(--login-tinta-apagada) !important;
+}
+
+/* Quem pediu menos movimento vê a tela montada, não a animação de entrada. */
+@media (prefers-reduced-motion: reduce) {
+  .tela-login [class*="animate-login"] {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }

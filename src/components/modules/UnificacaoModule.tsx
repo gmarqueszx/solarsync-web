@@ -10,6 +10,7 @@ import { formatarData } from '../../utils/data';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { SeloPrioridade } from '../common/SelosCliente';
 import { ClienteModal } from '../common/ClienteModal';
 import {
   Search,
@@ -84,9 +85,12 @@ export const UnificacaoModule: React.FC = () => {
   const itensPorPagina = 6;
 
   // Abre pelo que falta fazer: unificação pendente primeiro, desligamento por pedir em seguida.
+  // O cliente prioritário no topo da fila, antes da coluna escolhida — a mesma regra de
+  // todas as etapas, e a mesma que o `PrioridadePrimeiro` aplica na consulta do backend.
   const { ordenacao, ordenar, cabecalho } = useOrdenacao<Unificacao, ColunaUnificacao>(
     VALORES_ORDENAVEIS,
     { campo: 'feita', direcao: 'asc' },
+    (u) => u.cliente.prioridade,
   );
 
   // Modals
@@ -300,6 +304,7 @@ export const UnificacaoModule: React.FC = () => {
                     <td className="py-3.5 px-6">
                       <div className="flex items-center justify-between gap-1.5">
                         <span className="font-medium text-slate-800">{u.cliente.nome}</span>
+                        <SeloPrioridade prioridade={u.cliente.prioridade} />
                         <button
                           type="button"
                           onClick={() => abrirEdicaoClientePorId(u.cliente.id)}

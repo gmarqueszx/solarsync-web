@@ -80,12 +80,14 @@ export const Header: React.FC = () => {
         <button
           onClick={alternarTema}
           title={tema === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
-          className="p-2 rounded-xl border border-slate-200 dark:border-transparent bg-slate-50 dark:bg-superficie-sutil hover:bg-slate-100 dark:hover:bg-superficie-elevada text-slate-600 dark:text-texto-suave hover:text-slate-900 dark:hover:text-texto transition-colors flex items-center justify-center shadow-sm dark:shadow-none"
+          aria-label={tema === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
+          className="p-2 rounded-xl border border-slate-200 dark:border-transparent bg-slate-50 dark:bg-superficie-sutil hover:bg-slate-100 dark:hover:bg-superficie-elevada text-slate-600 dark:text-texto-suave hover:text-slate-900 dark:hover:text-texto transition-all duration-180 ease-suave active:scale-90 flex items-center justify-center shadow-sm dark:shadow-none"
         >
+          {/* `key` para o ícone remontar e a troca de tema ter um giro em vez de um pulo. */}
           {tema === 'dark' ? (
-            <Sun className="w-4 h-4 text-amber-400" />
+            <Sun key="sol" className="w-4 h-4 text-amber-400 animate-girar-entrada" />
           ) : (
-            <Moon className="w-4 h-4 text-slate-600" />
+            <Moon key="lua" className="w-4 h-4 text-slate-600 animate-girar-entrada" />
           )}
         </button>
 

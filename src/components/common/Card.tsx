@@ -27,7 +27,13 @@ export const Card: React.FC<CardProps> = ({
   noPadding = false,
 }) => {
   return (
-    <div className={cn('bg-superficie rounded-card border border-borda dark:border-transparent transition-colors', className)}>
+    <div
+      className={cn(
+        'bg-superficie rounded-card border border-borda dark:border-transparent',
+        'transition-colors duration-180 ease-suave',
+        className,
+      )}
+    >
       {(title || subtitle || action) && (
         <div
           className={cn(

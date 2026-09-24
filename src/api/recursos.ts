@@ -6,6 +6,7 @@ import { api } from './client';
 import {
   Cliente,
   DadosCliente,
+  DadosPrioridade,
   Debito,
   HistoricoStatus,
   KPIStats,
@@ -85,6 +86,37 @@ export const clientesApi = {
     api.post<Cliente>(`/api/clientes/${id}/sem-pendencia`),
   /** Devolve o cliente para a fila de verificação (novo ciclo ou marcação errada). */
   reverificar: (id: number) => api.post<Cliente>(`/api/clientes/${id}/reverificar`),
+
+  /**
+   * Adianta o cliente: ele passa a aparecer no topo da fila da etapa em que estiver, e continua
+   * no topo das seguintes até alguém encerrar. Chamar de novo revisa o motivo — não é preciso
+   * remover antes.
+   *
+   * Com `INSTALACAO_ADIANTADA`, a `dataInstalacao` é obrigatória (409
+   * `PRIORIDADE_SEM_INSTALACAO`) e desce para o projeto do cliente: é a mesma data que a etapa
+   * de vistoria exige, não uma segunda.
+   */
+  marcarPrioridade: (id: number, dados: DadosPrioridade) =>
+    api.post<Cliente>(`/api/clientes/${id}/prioridade`, dados),
+  /** A data de instalação já registrada no projeto permanece: é fato de campo, não privilégio. */
+  removerPrioridade: (id: number) =>
+    api.post<Cliente>(`/api/clientes/${id}/remover-prioridade`),
+};
+
+// ---------- Referências ----------
+
+/**
+ * As listas fechadas do cadastro. Vinham de `src/data/constantes.ts`; passaram para o servidor
+ * em 17/09/2026 porque a importação do Nectar precisa normalizar cidade e vendedor contra o
+ * mesmo padrão — e duas cópias divergem. O backend é a fonte de verdade.
+ */
+export interface Referencias {
+  municipios: string[];
+  vendedores: string[];
+}
+
+export const referenciasApi = {
+  listar: () => api.get<Referencias>('/api/referencias'),
 };
 
 // ---------- Usuários ----------
@@ -126,8 +158,8 @@ export interface FiltroPendencia {
   q?: string;
   /**
    * As duas filas de pendência que não podem ser resolvidas. São **derivadas** (pendência
-   * aberta + situação do débito), não status: a pendência travada continua ABERTA ou
-   * EM_ANDAMENTO, e um status próprio viveria dessincronizado do débito.
+   * aberta + situação do débito), não status: a pendência travada continua ABERTA, e um status
+   * próprio viveria dessincronizado do débito.
    */
   travadaPorDebito?: boolean;
   semConsultaDebito?: boolean;
@@ -155,8 +187,7 @@ export const pendenciasApi = {
   ) => api.put<Pendencia>(`/api/pendencias/${id}`, dados),
 
   // Transições são endpoints de ação: o PUT não aceita status, de propósito.
-  iniciar: (id: number, observacao?: string) =>
-    api.post<Pendencia>(`/api/pendencias/${id}/iniciar`, { observacao }),
+  // Não há "iniciar": apontar a pendência na triagem já é iniciá-la.
   resolver: (id: number, observacao?: string) =>
     api.post<Pendencia>(`/api/pendencias/${id}/resolver`, { observacao }),
   cancelar: (id: number, motivo: string) =>
@@ -191,7 +222,16 @@ export const debitosApi = {
     tipo: TipoDebito,
     status: StatusDebito,
     consultadoEm?: string,
-  ) => api.put<Debito>(`/api/debitos/cliente/${clienteId}`, { tipo, status, consultadoEm }),
+    proximoVencimento?: string | null,
+  ) =>
+    api.put<Debito>(`/api/debitos/cliente/${clienteId}`, {
+      tipo,
+      status,
+      consultadoEm,
+      // Só acompanha a quitação: com débito ATIVO o servidor ignora, porque aí não há "próxima
+      // conta" a esperar — há a atual, que já barra o envio sozinha.
+      proximoVencimento,
+    }),
 };
 
 // ---------- Projetos ----------
@@ -249,6 +289,11 @@ export const projetosApi = {
    * Falha com 409 `CLIENTE_COM_DEBITO` se o cliente estiver devendo, e com 409
    * `DEBITO_NAO_CONSULTADO` se ninguém tiver consultado o débito de homologação — que é o passo
    * do projetista ao receber o cliente.
+   */
+  /**
+   * Além de `CLIENTE_COM_DEBITO` e `DEBITO_NAO_CONSULTADO`, pode falhar com 409
+   * `PROXIMO_DEBITO_A_VENCER`: o cliente está quitado, mas a próxima conta vence em um dia ou
+   * menos e a Coelba analisaria o projeto já com débito em aberto.
    */
   encaminhar: (
     id: number,
