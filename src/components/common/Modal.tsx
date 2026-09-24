@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { cn } from '../../utils/cn';
 
 interface ModalProps {
   isOpen: boolean;
@@ -11,6 +12,9 @@ interface ModalProps {
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
 }
 
+/** Tem de bater com a duração de `animate-sair-dialogo` no tailwind.config.js. */
+const DURACAO_SAIDA = 150;
+
 export const Modal: React.FC<ModalProps> = ({
   isOpen,
   onClose,
@@ -20,21 +24,63 @@ export const Modal: React.FC<ModalProps> = ({
   footer,
   maxWidth = 'lg',
 }) => {
+  /**
+   * O diálogo continua montado durante a animação de saída.
+   *
+   * Antes ele sumia no mesmo quadro em que `isOpen` virava falso — havia animação de entrada e
+   * nenhuma de saída, então salvar um formulário fazia a janela piscar para fora. O estado
+   * `fechando` é o que dá ao CSS os 150ms de que ele precisa antes de a árvore ser desmontada.
+   */
+  const [montado, setMontado] = useState(isOpen);
+  const [fechando, setFechando] = useState(false);
+  const dialogo = useRef<HTMLDivElement>(null);
+  const focoAnterior = useRef<Element | null>(null);
+
+  /**
+   * `fechar` só avisa o pai; quem decide desmontar é o efeito abaixo, olhando para `isOpen`.
+   * Assim a animação de saída vale também quando o módulo fecha o diálogo por conta própria —
+   * depois de salvar, por exemplo —, e não só quando se clica no X.
+   */
+  const fechar = useCallback(() => onClose(), [onClose]);
+
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
     if (isOpen) {
-      document.body.style.overflow = 'hidden';
-      window.addEventListener('keydown', handleKeyDown);
+      setMontado(true);
+      setFechando(false);
+      return;
     }
+    if (!montado) return;
+
+    setFechando(true);
+    const temporizador = window.setTimeout(() => {
+      setMontado(false);
+      setFechando(false);
+    }, DURACAO_SAIDA);
+    return () => window.clearTimeout(temporizador);
+  }, [isOpen, montado]);
+
+  useEffect(() => {
+    if (!montado) return;
+
+    focoAnterior.current = document.activeElement;
+    document.body.style.overflow = 'hidden';
+    // Foco no diálogo: sem isto o teclado continua na página atrás, e Tab passeia por trás do
+    // backdrop em vez de andar pelo formulário.
+    dialogo.current?.focus();
+
+    const aoTeclar = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') fechar();
+    };
+    window.addEventListener('keydown', aoTeclar);
+
     return () => {
       document.body.style.overflow = 'unset';
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keydown', aoTeclar);
+      (focoAnterior.current as HTMLElement | null)?.focus?.();
     };
-  }, [isOpen, onClose]);
+  }, [montado, fechar]);
 
-  if (!isOpen) return null;
+  if (!montado) return null;
 
   const widthClass = {
     sm: 'max-w-sm',
@@ -45,43 +91,52 @@ export const Modal: React.FC<ModalProps> = ({
   }[maxWidth];
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 sm:p-6 animate-surgir">
-      {/* Backdrop */}
+    <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 sm:p-6">
       <div
-        className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
+        className={cn(
+          'fixed inset-0 bg-slate-900/40 dark:bg-black/70 backdrop-blur-sm',
+          fechando ? 'animate-sair-esmaecer' : 'animate-esmaecer',
+        )}
+        onClick={fechar}
+        aria-hidden="true"
       />
 
-      {/* Modal Dialog */}
       <div
-        className={`relative bg-white w-full ${widthClass} rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-10 flex flex-col max-h-[90vh]`}
+        ref={dialogo}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className={cn(
+          // Tokens de interface no lugar de `bg-white` / `border-slate-100`: o diálogo era a
+          // última superfície do sistema ainda escrita em cor fixa de tema claro, e só não
+          // aparecia quebrada no escuro por causa dos overrides `!important` do index.css.
+          'relative w-full rounded-2xl border border-borda dark:border-white/[0.06] bg-superficie',
+          'shadow-xl dark:shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)]',
+          'overflow-hidden z-10 flex flex-col max-h-[90vh] focus:outline-none',
+          widthClass,
+          fechando ? 'animate-sair-dialogo' : 'animate-entrar-dialogo',
+        )}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
-          <div>
-            <h3 className="text-base font-medium text-slate-800 tracking-tight">
-              {title}
-            </h3>
-            {subtitle && (
-              <p className="text-xs text-[#424342] mt-0.5">{subtitle}</p>
-            )}
+        <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-borda dark:border-white/[0.04] bg-superficie-sutil">
+          <div className="min-w-0">
+            <h3 className="text-base font-medium text-texto tracking-tight truncate">{title}</h3>
+            {subtitle && <p className="text-xs text-texto-suave mt-0.5">{subtitle}</p>}
           </div>
           <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+            type="button"
+            onClick={fechar}
+            aria-label="Fechar"
+            className="p-1.5 shrink-0 text-texto-apagado hover:text-texto hover:bg-superficie-elevada rounded-lg transition-colors duration-120 active:scale-95"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Body */}
-        <div className="p-6 overflow-y-auto space-y-4 text-sm text-slate-700">
-          {children}
-        </div>
+        <div className="p-6 overflow-y-auto space-y-4 text-sm text-texto-suave">{children}</div>
 
-        {/* Footer */}
         {footer && (
-          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/50">
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-borda dark:border-white/[0.04] bg-superficie-sutil">
             {footer}
           </div>
         )}

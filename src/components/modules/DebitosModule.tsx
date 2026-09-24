@@ -22,10 +22,11 @@ import {
   TIPOS_DEBITO,
   TipoDebito,
 } from '../../types';
-import { formatarDataHora } from '../../utils/data';
+import { formatarData, formatarDataHora } from '../../utils/data';
 import { Badge } from '../common/Badge';
 import { Card } from '../common/Card';
 import { Modal } from '../common/Modal';
+import { SelosCliente } from '../common/SelosCliente';
 import { AbasSegmentadas } from '../ui/Abas';
 import { BadgeTempo } from '../ui/BadgeTempo';
 import { Botao } from '../ui/Button';
@@ -102,7 +103,7 @@ type ColunaDebito = keyof typeof VALORES_ORDENAVEIS;
  * Em que etapas o débito ainda tem o que travar, por cliente. É o que decide quais linhas a
  * listagem mostra.
  *
- * - `PENDENCIA` enquanto houver pendência em curso (`ABERTA`/`EM_ANDAMENTO`): é o débito que
+ * - `PENDENCIA` enquanto houver pendência em curso (`ABERTA`): é o débito que
  *   impede a Coelba de executá-la. Cliente que foi direto (`SEM_PENDENCIA`) nunca precisa dessa
  *   consulta, e cliente ainda em triagem não precisa **ainda** — não se sabe se haverá pendência.
  * - `HOMOLOGACAO` a partir do momento em que existe projeto ainda não aprovado: é a consulta que
@@ -125,7 +126,7 @@ function etapasEmAberto(
   };
 
   pendencias.forEach((p) => {
-    if (p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO') marcar(p.cliente.id, 'PENDENCIA');
+    if (p.status === 'ABERTA') marcar(p.cliente.id, 'PENDENCIA');
   });
   projetos.forEach((p) => {
     if (p.status !== 'APROVADO') marcar(p.cliente.id, 'HOMOLOGACAO');
@@ -145,9 +146,11 @@ export const DebitosModule: React.FC = () => {
   const [pagina, setPagina] = useState(1);
 
   // Abre pelos mais urgentes, que é o motivo de a tela existir; qualquer cabeçalho reordena.
+  // A prioridade vem antes de tudo, aqui como nas outras filas.
   const { ordenacao, ordenar, cabecalho } = useOrdenacao<LinhaDebito, ColunaDebito>(
     VALORES_ORDENAVEIS,
     { campo: 'situacao', direcao: 'asc' },
+    (l) => l.cliente.prioridade,
   );
 
   const [clienteDetalhe, setClienteDetalhe] = useState<Cliente | null>(null);
@@ -156,6 +159,12 @@ export const DebitosModule: React.FC = () => {
   const [clienteSelecionadoId, setClienteSelecionadoId] = useState<number | ''>('');
   const [novoTipo, setNovoTipo] = useState<TipoDebito>('HOMOLOGACAO');
   const [novoStatus, setNovoStatus] = useState<StatusDebito>('QUITADO');
+  /**
+   * A data da próxima conta, vista na mesma consulta que constatou a quitação. Opcional: nem
+   * toda consulta mostra a próxima, e "não informado" é resposta legítima — inventar uma data
+   * faria o envio à Coelba ser recusado por um vencimento que ninguém viu.
+   */
+  const [proximoVencimento, setProximoVencimento] = useState('');
   const [salvando, setSalvando] = useState(false);
 
   /** Índice por `clienteId|tipo` — a mesma chave de negócio que o banco usa. */
@@ -263,6 +272,7 @@ export const DebitosModule: React.FC = () => {
     setClienteSelecionadoId(clienteId ?? semConsulta[0]?.cliente.id ?? clientes[0]?.id ?? '');
     setNovoTipo(tipo ?? (aba === 'PENDENCIA' ? 'PENDENCIA' : 'HOMOLOGACAO'));
     setNovoStatus('QUITADO');
+    setProximoVencimento('');
     setIsModalNovoAberto(true);
   };
 
@@ -271,7 +281,14 @@ export const DebitosModule: React.FC = () => {
     if (clienteSelecionadoId === '') return;
     setSalvando(true);
     try {
-      await registrarConsultaDebito(Number(clienteSelecionadoId), novoTipo, novoStatus);
+      await registrarConsultaDebito(
+        Number(clienteSelecionadoId),
+        novoTipo,
+        novoStatus,
+        // Só faz sentido com quitação: com débito ativo não há "próxima conta" a esperar, há a
+        // atual — e é ela que já barra o envio. O servidor aplica a mesma regra.
+        novoStatus === 'QUITADO' ? proximoVencimento || null : null,
+      );
       setIsModalNovoAberto(false);
     } catch {
       // O AppContext já mostrou o toast de erro.
@@ -413,7 +430,10 @@ export const DebitosModule: React.FC = () => {
               linhasPaginadas.map((l) => (
                 <Linha key={l.chave}>
                   <Td className="pl-6">
-                    <div className="font-medium text-texto">{l.cliente.nome}</div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-medium text-texto">{l.cliente.nome}</span>
+                      <SelosCliente cliente={l.cliente} />
+                    </div>
                     <div className="text-2xs text-texto-suave flex items-center gap-2 mt-0.5">
                       <span className="flex items-center gap-1">
                         <MapPin className="w-3 h-3 text-texto-apagado" />
@@ -636,6 +656,30 @@ export const DebitosModule: React.FC = () => {
               </label>
             </div>
           </Campo>
+
+          {/*
+            Aparece só na quitação, porque só ali a pergunta faz sentido. É o problema que a
+            equipe levantou: quitado hoje, vencendo amanhã — o projeto encaminhado nessa véspera
+            volta reprovado, porque quando a Coelba for analisar já existe débito.
+          */}
+          {novoStatus === 'QUITADO' && (
+            <Campo
+              rotulo="Data do próximo débito"
+              htmlFor="debito-proximo-vencimento"
+              ajuda={
+                'Opcional. Faltando um dia ou menos para esta data, encaminhar o projeto à '
+                + 'Coelba passa a ser recusado — a Coelba analisaria o projeto já com débito em '
+                + 'aberto. Deixe em branco se a consulta não mostrou a próxima conta.'
+              }
+            >
+              <Entrada
+                id="debito-proximo-vencimento"
+                type="date"
+                value={proximoVencimento}
+                onChange={(e) => setProximoVencimento(e.target.value)}
+              />
+            </Campo>
+          )}
         </form>
       </Modal>
 
@@ -682,6 +726,14 @@ export const DebitosModule: React.FC = () => {
                   <span>Consulta: {formatarDataHora(l.ultimaConsultaEm)}</span>
                   {l.consultadoPorNome && <span>por {l.consultadoPorNome}</span>}
                 </div>
+                {l.debito?.proximoVencimento && (
+                  <div className="text-2xs text-texto-suave">
+                    Próximo débito:{' '}
+                    <span className="text-texto font-medium">
+                      {formatarData(l.debito.proximoVencimento)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-end">
                   {l.debito ? (
                     <Botao

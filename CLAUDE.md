@@ -70,10 +70,65 @@ as regras de negócio, que chegam como 409 com texto pronto:
 | `TRANSICAO_INVALIDA` | o status atual não permite aquela mudança |
 | `ACESSO_NEGADO` | o papel do usuário não permite a ação |
 | `UNIFICACAO_NAO_FEITA` | o desligamento só é pedido depois de confirmada a unificação |
+| `NUMERO_SOLICITACAO_OBRIGATORIO` | envio à Coelba sem o nº da solicitação (ver abaixo) |
+| `LIMITE_DE_TENTATIVAS` | 429 no login: tentativas demais (ver abaixo) |
+| `SEM_CONEXAO` | **não vem da API** — é o `client.ts` traduzindo falha de rede (ver abaixo) |
 
 Os dois primeiros são recusas **diferentes** de propósito, e as telas antecipam qual será
 (`bloqueioDaResolucao` em Pendências, `bloqueioDoEnvio` em Projetos) em vez de deixar o analista
 descobrir clicando. Juntá-los mandaria cobrar um cliente que talvez não deva nada.
+
+#### Login bloqueado por tentativas (19/09/2026)
+
+O backend ganhou limite de tentativas no `/api/auth/login` (BCrypt é caro de propósito, e sem
+limite isso vira vetor de negação de serviço). A recusa vem como **429** com `codigo:
+LIMITE_DE_TENTATIVAS` e o cabeçalho **`Retry-After`** em segundos.
+
+- `ApiError.esperarSegundos` lê o `Retry-After`. É o único cabeçalho que o cliente HTTP olha, e
+  existe para a tela **contar o tempo** em vez de dizer "tente mais tarde" e deixar a pessoa
+  adivinhar quanto é mais tarde.
+- `AuthContext.bloqueadoAte` guarda o instante em que a espera acaba. A `LoginScreen` faz a
+  contagem regressiva, **desabilita o botão** enquanto dura e mostra um aviso **âmbar**, não
+  vermelho: não é erro de quem digita, é o servidor pedindo espera.
+- ⚠️ **O aviso substitui a mensagem de credencial** enquanto o bloqueio dura. Enquanto ele vale,
+  a senha nem chega a ser avaliada — mostrar "credenciais inválidas" faria a pessoa achar que
+  errou a digitação e tentar de novo, que é exatamente o que não ajuda. (Insistir também não
+  aumenta a espera: a tentativa bloqueada não entra na contagem do servidor.)
+- Distinguir este caso **não vaza nada**: ele não fala sobre a conta, fala sobre quantas vezes
+  já se tentou. Todos os outros motivos de recusa seguem com a mesma mensagem genérica, de
+  propósito.
+
+#### Falha de rede virou erro com código (19/09/2026)
+
+O `fetch` lança `TypeError` quando não alcança o servidor — API desligada, rede caída, CORS
+barrado —, e isso chegava às telas como erro genérico. Na de login, um backend simplesmente
+desligado aparecia como "não foi possível entrar", indistinguível de senha errada; era um buraco
+conhecido registrado na seção 11 do CLAUDE.md do backend.
+
+Agora o `client.ts` converte em `ApiError` com `status: 0` e `codigo: SEM_CONEXAO`, e a mensagem
+diz para conferir se a API está no ar. Vale para **todas** as telas, não só a de login.
+
+### O nº da solicitação é obrigatório para enviar à Coelba (17/09/2026)
+
+Decisão do usuário. É a chave que casa o retorno por e-mail da Coelba com o projeto (seção 9 do
+CLAUDE.md do backend); sem ela o projeto vai à Coelba sem chave nenhuma de volta, e a automação
+da etapa 3 não tem como saber de que projeto o e-mail fala.
+
+Vale no **envio e no reenvio** — no reenvio a Coelba pode emitir outro número, e aceitar vazio
+manteria o do ciclo anterior. O modal já pré-preenche o número atual no reenvio, então o custo
+para a analista é confirmar, não digitar de novo.
+
+Três barreiras, da mais amigável para a última:
+
+1. o botão "Confirmar Envio" fica **desabilitado** enquanto o campo está vazio — o analista
+   descobre antes de clicar, e não por um toast de erro;
+2. `handleConfirmarEncaminhamento` recusa em branco, para nenhum caminho alternativo escapar;
+3. `encaminharProjeto` e `reencaminharProjeto` recebem `numeroSolicitacao: string` **não
+   opcional**, e por isso ele vem **antes** da `dataArt` na assinatura de `encaminharProjeto` —
+   assim o próprio TypeScript recusa a chamada sem ele, em vez de descobrirmos com um 400.
+
+⚠️ A API recusa com **400 `VALIDACAO`** (é `@NotBlank` de corpo), não com o 409 da tabela acima.
+O 409 `NUMERO_SOLICITACAO_OBRIGATORIO` existe para as origens que não são a tela.
 
 ⚠️ **Invariante do débito: um débito trava uma etapa só** — ou a resolução da pendência, ou a
 homologação do projeto, nunca as duas (reforçado pelo usuário em 16/09/2026). Na prática, isso
@@ -93,7 +148,7 @@ pendência cobrada de quem nunca teve pendência. Quem responde "que etapa é es
 
 | Tipo | Aparece quando |
 |---|---|
-| `PENDENCIA` | há pendência `ABERTA`/`EM_ANDAMENTO` do cliente |
+| `PENDENCIA` | há pendência `ABERTA` do cliente |
 | `HOMOLOGACAO` | há projeto do cliente ainda não `APROVADO` |
 | qualquer | o débito daquele tipo está `ATIVO` |
 
@@ -128,6 +183,83 @@ backend** — não havia como cadastrar o primeiro cliente (era o estado até 04
   ou **apontar pendência** (abre modal para escolher o tipo — Troca de Titularidade, Ligação Nova, etc. —,
   criando a pendência e marcando o cliente como `COM_PENDENCIA` automaticamente, sem precisar navegar
   ao módulo de Pendências e reinserir os dados manualmente).
+
+### Os selos ao lado do nome do cliente (`common/SelosCliente`)
+
+Quatro selos, num componente só porque aparecem em seis módulos: **Prioridade** (âmbar, seta para
+cima), **Só pendência** (cinza), **CRM** e **Banco**. Cada um só aparece quando diz algo que muda
+o trabalho de quem olha — selo em toda linha vira ruído e deixa de ser informação.
+
+⚠️ **`CRM` e `Banco` vêm prontas do backend**, em `cliente.etiquetas`. A tela não as monta, e é
+isso que torna impossível violar o "não duplicar etiquetas caso a operação seja executada
+novamente": uma lista derivada a cada leitura não tem como acumular repetição.
+
+A prioridade é **âmbar com seta para cima**, não vermelha: a leitura precisa ser "este subiu na
+fila", não "este tem um problema", que é o que a paleta de erro diria. O `title` traz motivo,
+data de instalação e observação — é o que decide se a prioridade ainda vale, e quem revisa a fila
+precisa disso sem abrir o cadastro.
+
+### Prioridade de cliente (22/09/2026)
+
+O botão de seta para cima em cada linha de Clientes abre o modal de prioridade; um segundo botão
+(seta para baixo) encerra. Chamar de novo **revisa** o motivo — não é preciso remover antes, e o
+formulário reabre no que já estava valendo, porque revisar é o caso mais comum depois de criar e
+obrigar a redigitar o motivo convidaria a trocá-lo por engano.
+
+⚠️ **A data de instalação só aparece com o motivo "Instalação adiantada"**, e ali é obrigatória —
+o backend recusa com 409 `PRIORIDADE_SEM_INSTALACAO`. Ela **não é um segundo campo de data de
+instalação**: o servidor a copia para `projeto.dataInstalacao`, que é o campo que a etapa de
+Vistoria já lia e exigia. Consequência visível: o cliente prioritário por instalação chega à fila
+da Vistoria com a data preenchida e o botão de solicitar já liberado.
+
+A ordenação é o resto da regra, e está no `useOrdenacao` — ver "Ordenação das listagens".
+
+### Fluxo "somente pendência" (22/09/2026)
+
+Dois checkboxes no `ClienteModal` desenham o fluxo do cliente: **somente pendência** (avulso do
+gestor: entrada → pendência → resolvida → fim, sem projeto) e **Banco** (financiamento). Ficam no
+cadastro e não num endpoint de ação porque não são etapas — são o desenho do fluxo daquele
+cliente, decidido na entrada. E **desmarcar "somente pendência" é o caminho** para devolver ao
+fluxo completo o avulso que virou projeto de verdade.
+
+Na listagem, o cliente avulso com a pendência já resolvida mostra **"Fluxo concluído"** na coluna
+de situação. O rótulo é necessário: sem ele, "nenhuma pendência aberta e nenhum projeto" seria
+indistinguível de "ninguém fez nada", que é o oposto do que aconteceu. É derivado das pendências
+que o `AppContext` já carrega — pedir isso à API custaria uma contagem por linha da listagem.
+
+### Selo "CRM": de onde o cadastro veio (17/09/2026)
+
+Desde que o backend importa clientes do Nectar automaticamente (seção 9 do CLAUDE.md do backend),
+a tabela mostra um selo **CRM** ao lado do nome quando `cliente.origem === 'CRM_NECTAR'`. Pedido
+do usuário, e não enfeite: **a confiança nos dados é diferente**. O cliente do CRM chega com
+cidade e vendedor normalizados contra as listas do cadastro, e o que não casou chega **vazio** —
+então campo em branco ali significa "o CRM não tinha o dado no padrão" e pede o preenchimento de
+alguém, que é justamente o trabalho da triagem. Num cadastro manual, campo vazio é esquecimento.
+
+Só o cliente do CRM ganha selo: manual é o caso normal, e um selo em toda linha viraria ruído. O
+`title` do selo traz o `nectarOportunidadeId`, que é como se acha o negócio no Nectar — necessário
+porque **um cliente com vários negócios vira vários cadastros**, com o nome repetido e nada mais
+distinguindo as linhas.
+
+⚠️ `origem` e `nectarOportunidadeId` estão **fora** de `DadosCliente`: são procedência, não campos
+editáveis. Editar um cadastro não pode fazer um cliente do CRM passar por cadastro manual.
+
+### As listas de municípios e vendedores vêm da API
+
+⚠️ **`src/data/constantes.ts` foi apagado em 17/09/2026.** Os 417 municípios da Bahia e os
+vendedores agora vêm de `GET /api/referencias`, carregados uma vez pelo `AppContext` e servidos ao
+`ClienteModal` por `useApp().referencias`.
+
+O motivo é o de sempre: a importação do Nectar normaliza cidade e vendedor **no servidor**, contra
+o mesmo padrão que este formulário oferece. Com a lista aqui também, seriam duas cópias — e o
+problema não é teórico: a primeira importação real entrou com "CACULE", "VITÓRIA DA CONQUISTA" e
+"Vitória Da Conquista" como cidades diferentes, e com vendedores ("Rodrigo soares") que o
+`<select>` desta tela não oferece. O backend é a fonte de verdade.
+
+Consequência: as listas nascem **vazias** e se preenchem na primeira carga. O campo de município
+e o seletor de vendedor aparecem sem opção por um instante — aceitável, e melhor que uma cópia
+local que envelhece. Um vendedor novo agora exige deploy do **backend**
+(`src/main/resources/referencia/vendedores.txt`), não deste repositório.
 
 ## RBAC na interface
 
@@ -168,6 +300,19 @@ Google). Contas antigas sem senha aparecem na tela com o aviso de que não conse
   guarda do backend, não substituto dela.
 - Depois de cada mutação, o módulo chama `recarregar()` do contexto: os seletores de responsável
   das outras telas saem deste mesmo cadastro e ficariam desatualizados até o próximo F5.
+
+## Pendências: não há botão de "iniciar"
+
+⚠️ O botão de **play** ("Iniciar Atendimento", `ABERTA → EM_ANDAMENTO`) saiu em 19/09/2026,
+decisão do usuário, junto com o status e o endpoint por trás dele. Apontar a pendência na
+triagem do cliente **é** iniciá-la: dali o cliente já cai nesta tela e a solicitação já correu
+na Coelba. O clique não mudava nada — o tempo de resolução sempre saiu de `solicitadoEm`,
+gravado na criação —, e o que ele produzia era pendência parada em "Aberta" por esquecimento,
+indistinguível de trabalho que ninguém pegou.
+
+Sobraram três status (`ABERTA` → `RESOLVIDA` | `CANCELADA`), então **"Aberta" é o único estado
+ativo** e toda condição de fila da tela é `status === 'ABERTA'`, não mais uma dupla. O andamento
+("protocolo aberto na Coelba") vive na observação, que é editável sempre — ver abaixo.
 
 ## Pendências: a observação é editável sempre
 
@@ -219,6 +364,80 @@ lista; Inter 400/500.
 **Modo escuro** (`ThemeContext.tsx`): persistido em `localStorage` (`solarsync_tema`), detecta a
 preferência do sistema, alternância no Header e no Login.
 
+### Movimento (19/09/2026)
+
+Fora da tela de login, o sistema não tinha movimento: quatro usos de `animate-*` no projeto
+inteiro, e cerca de um em cada cinco `hover:` sem `transition`. Trocar de módulo era um corte
+seco. O vocabulário agora está em três lugares, e só três:
+
+- **`tailwind.config.js`** — as curvas (`ease-suave` para o que entra, `ease-saida` para o que
+  sai), os três tempos (`duration-120` toque, `duration-180` estado, `duration-320` tela) e os
+  keyframes: `esmaecer`/`sair-esmaecer`, `entrar-tela`, `entrar-dialogo`/`sair-dialogo`,
+  `entrar-aviso`/`sair-aviso`, `desenhar`, `crescer-x`, `girar-entrada`.
+- **`src/index.css`** — o que precisa de CSS de verdade: a cascata `.escalonar` (atraso por
+  `nth-child`, 40ms por item), o realce `.elevar-no-hover`, o anel de foco único em
+  `:focus-visible`, e a **transição padrão** de `a, button, summary, tr, input, select,
+  textarea, [role=button], [role=tab]`.
+- os componentes, que só declaram exceções.
+
+⚠️ Três armadilhas que esta implementação encontrou, e que a próxima repetiria:
+
+1. **A transição padrão está em `:where(...)`, de especificidade zero.** É o que deixa qualquer
+   componente continuar declarando `transition-colors duration-300` e vencer sem `!important`.
+   Num seletor comum ela disputaria com as utilitárias do Tailwind e o resultado dependeria da
+   ordem no CSS gerado.
+2. **`@keyframes entrar-cartao` vive no `index.css`, não no config.** O Tailwind só emite os
+   keyframes de uma animação quando a utilitária `animate-*` correspondente aparece no markup —
+   e essa é usada por uma classe CSS (`.escalonar`). Declarada só no config, a regra apontava
+   para um `@keyframes` inexistente e a cascata não acontecia, **sem erro em lugar nenhum**.
+   Conferido no CSS compilado (`npm run build`, `grep @keyframes dist/assets/*.css`).
+3. **O guarda de `prefers-reduced-motion` é global**, e usa `animation-duration: 0.01ms` em vez
+   de `animation: none`. Com `fill-mode: both`, `none` devolveria o elemento ao estado inicial —
+   opacidade zero —, escondendo metade da interface de quem pediu menos movimento. O bloco antigo
+   cobria só `.tela-login`, então tudo acrescentado fora dela ignorava a preferência.
+
+Diálogo e aviso ficam montados durante a saída (`Modal` tem estado `fechando`; `Toast` tem o
+seu): antes havia entrada animada e nenhuma saída, e salvar um formulário fazia a janela piscar
+para fora.
+
+### Os gráficos do dashboard (`ui/Graficos.tsx`)
+
+⚠️ Os dois eram desenhados à mão dentro do `DashboardModule`, e os dois **mentiam**:
+
+- o de ritmo tinha um `path` SVG de coordenadas fixas no código — a curva era sempre a mesma por
+  mais que os números mudassem. Os quatro pontos calculavam um valor a partir dos KPIs, e o valor
+  não era usado em lugar nenhum: só a bolinha era desenhada, sempre na mesma altura. Era
+  decoração com cara de dado, num painel gerencial;
+- o de tipos pintava a **maior** barra de branco — invisível no tema claro (fundo branco) e
+  invisível no escuro também, porque o `index.css` reescreve `.bg-white` para a cor da
+  superfície. E dava 12% de altura mínima a toda barra, então "zero" desenhava um toco igual
+  ao de "um".
+
+O que substituiu, e por quê:
+
+- **`GraficoLinhas`** — duas séries reais, tiradas de `projeto.dataAprovacao` e
+  `projeto.dataEncaminhado` pelos baldes de `src/utils/series.ts`. Semanal até ~3 meses de
+  recorte, mensal acima disso (com "Todos", 52 colunas semanais viram uma serra ilegível). Tem
+  legenda, eixo Y, cruz de leitura com tooltip, navegação por setas do teclado e um `<details>`
+  "Ver números" com a tabela — nenhum valor fica trancado atrás do ponteiro do mouse.
+- **`GraficoBarrasHorizontais`** — deitado porque os rótulos são longos ("Ampliação de Projeto
+  Existente") e em coluna eram cortados. **Uma cor só**: categoria nominal não tem ordem, e
+  pintar cada barra de um tom codificaria duas vezes o que o tamanho já diz.
+- **`Medidor`** — substituiu a barra verde-contra-âmbar da "Carga por Analista". Aquele par tem
+  separação de 3,1 em deuteranopia: a barra inteira virava um bloco só para quem não distingue
+  verde de vermelho, e a barra é o que se olha antes de ler os números. Agora é uma cor sobre
+  trilho neutro.
+
+⚠️ **`useLargura` (ResizeObserver) não é preciosismo.** O SVG antigo usava
+`preserveAspectRatio="none"`, que dá escalas diferentes a X e Y e **transforma todo círculo em
+elipse** — era o que deformava os pontos. Não há correção por CSS depois; o jeito é o `viewBox`
+ter a largura real do elemento.
+
+**As cores das séries** (`COR_SERIE`) são `#149911` (verde da marca) e `#0B7FBF`. Passam nos seis
+testes de paleta categórica nos **dois** temas — banda de luminosidade, piso de croma, separação
+para daltonismo (ΔE 23,6, contra o mínimo de 8) e contraste ≥ 3:1 contra as duas superfícies.
+Mesmos valores nos dois temas de propósito: o que muda é o fundo, não a identidade da série.
+
 ## Ordenação das listagens
 
 `src/hooks/useOrdenacao.ts` + o `Ordenavel` de `ui/Tabela` dão ordenação crescente/decrescente
@@ -229,6 +448,15 @@ antiga por resolver, Clientes por "falta checar".
 
 Três decisões que a implementação carrega:
 
+- **O cliente prioritário vem antes de tudo.** O `useOrdenacao` aceita uma âncora
+  (`prioritario`) que ordena antes da coluna escolhida e **não** é multiplicada pelo sinal da
+  direção — inverter a coluna não pode mandar o prioritário para o fim da lista, que é justamente
+  onde ele não pode estar. É prefixo, não substituição: dentro de cada grupo a ordenação pedida
+  continua valendo.
+  <p>
+  ⚠️ O backend faz o mesmo na consulta (`common/web/PrioridadePrimeiro`), e as duas pontas
+  precisam concordar: se divergissem, paginar no servidor embaralharia a ordem entre uma página e
+  outra. Toda listagem que mostra cliente passa a âncora.
 - **É no cliente.** O `AppContext` já traz as listas inteiras (dezenas a centenas de linhas), e
   ordenar aqui é instantâneo em vez de uma ida ao servidor por clique. Se o volume crescer a
   ponto de paginar no servidor, é este hook que passa a mandar `sort` na requisição.
@@ -244,6 +472,33 @@ descrita abaixo.
 O rótulo clicável é `whitespace-nowrap`: com o texto quebrando em duas linhas, a seta ia parar
 ao lado do bloco inteiro e parecia solta no meio do cabeçalho. Rótulo de coluna é curto, e a
 tabela tem largura — se algum precisar de duas linhas, encurte o rótulo em vez de deixar quebrar.
+
+## A regra do débito futuro mora em `utils/debito.ts`
+
+O backend é quem decide se o projeto pode ir à Coelba (`ProjetoService`), e é lá que a regra tem
+de ficar: ela precisa valer também quando a origem não é a tela — a importação da planilha, a
+leitura do e-mail, uma integração futura. O que existe aqui é a mesma leitura feita **antes do
+clique**, para a analista não descobrir o motivo só depois de tentar enviar.
+
+`bloqueioDoEnvio(debitos)` devolve a função que responde por cliente, com os três motivos na mesma
+ordem do servidor: `SEM_CONSULTA` (ninguém olhou a agência virtual), `DEBITO_ATIVO` (o cliente
+deve) e `PROXIMO_DEBITO` (está quitado, mas a próxima conta vence em um dia ou menos — a Coelba
+analisaria o projeto já com débito em aberto).
+
+⚠️ Está num util, e não dentro do `ProjetosModule` como estava antes, porque o terceiro motivo
+nasceria copiado para a tela de Débitos e para a de Vistoria assim que alguém precisasse dele
+ali. Um lugar só.
+
+⚠️ **`diasAte` compara datas, não instantes**, e lê os números da string em vez de usar
+`new Date('2026-09-23')` — esse construtor lê a data pura como meia-noite **UTC**, que em
+`America/Sao_Paulo` é o dia anterior às 21h. Seria um erro de um dia exatamente na faixa em que a
+resposta muda de "pode enviar" para "não pode", e que só apareceria à noite. Mesma armadilha
+descrita abaixo.
+
+A coluna **"Próximo débito"** da tela de Projetos sai daí, e do débito de **homologação** — o de
+pendência pertence a outra etapa e mostrá-lo ali responderia a pergunta errada. Sem data, a
+coluna diz **"Não informado"** por extenso, e não um travessão: travessão se lê como "não tem", e
+aqui não se sabe.
 
 ## Datas
 
@@ -292,6 +547,35 @@ pessoa. Replicá-lo aqui significaria reimplementar no cliente a regra de que ca
 a sua data de referência — que é justamente o que o `DashboardRepository` faz. Leia-os como "a
 situação de agora, para esta pessoa". Se isso incomodar, a saída é mover os três blocos para a
 API, não copiar a lógica de datas para cá.
+
+## Deploy
+
+Escrito em 24/09/2026, junto com o do backend (seção 14 do CLAUDE.md de lá, e o runbook em
+`deploy/README.md` naquele repositório).
+
+O frontend vai para o **Cloudflare Pages**, não para o VPS onde a API roda. Ele é `vite build` —
+arquivos estáticos —, e o Pages os serve com TLS, CDN e build automático a cada push, de graça.
+Pôr um nginx no servidor para servir três arquivos seria mais coisa para manter, e ainda deixaria
+o frontend fora do ar toda vez que o VPS reiniciasse por causa da API.
+
+| Campo no painel do Pages | Valor |
+|---|---|
+| Build command | `npm run build` |
+| Output directory | `dist` |
+| `VITE_API_URL` | `https://api.solarsync.conectsol.com` |
+
+Dois pontos que custam tempo quando esquecidos:
+
+- ⚠️ **`VITE_API_URL` é lida no build, não em tempo de execução.** O Vite a substitui por
+  literal dentro do bundle (`src/api/client.ts`). Trocar a variável no painel não muda nada até
+  um "Retry deployment" — o sintoma é a tela nova continuar chamando o endereço antigo.
+- ⚠️ **A origem publicada precisa estar em `SOLARSYNC_CORS_ORIGENS` no servidor**, exatamente
+  como o navegador a vê: com `https://` e sem barra no fim. Errar isso é o motivo nº 1 de "a tela
+  carrega e nenhuma requisição funciona" — e o erro aparece só no console do navegador, porque
+  para a API a requisição nem chegou a ser processada.
+
+Não há rota no cliente (a navegação entre módulos é estado, não URL), então o Pages não precisa
+de regra de reescrita para SPA.
 
 ## Pendente
 

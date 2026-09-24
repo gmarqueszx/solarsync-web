@@ -42,13 +42,21 @@ export class ApiError extends Error {
   readonly status: number;
   readonly codigo: string;
   readonly erros: Array<{ campo: string; mensagem: string }>;
+  /**
+   * Segundos do cabeçalho `Retry-After`, quando a API mandou um. Hoje só o 429 do login manda,
+   * e é o que permite à tela contar o tempo em vez de mandar o usuário "tentar mais tarde" e
+   * deixá-lo adivinhar quanto é mais tarde.
+   */
+  readonly esperarSegundos: number | null;
 
-  constructor(problema: ProblemDetail) {
+  constructor(problema: ProblemDetail, retryAfter?: string | null) {
     super(problema.detail || problema.title || 'Erro na requisição');
     this.name = 'ApiError';
     this.status = problema.status;
     this.codigo = problema.codigo ?? 'DESCONHECIDO';
     this.erros = problema.erros ?? [];
+    const segundos = Number(retryAfter);
+    this.esperarSegundos = Number.isFinite(segundos) && segundos > 0 ? segundos : null;
   }
 
   /** Mensagem pronta para o usuário, com os campos inválidos quando houver. */
@@ -129,11 +137,25 @@ export async function requisitar<T>(caminho: string, opcoes: Opcoes = {}): Promi
     cabecalhos.Authorization = `Bearer ${token}`;
   }
 
-  const resposta = await fetch(montarUrl(caminho, parametros), {
-    method: metodo,
-    headers: cabecalhos,
-    body: corpo === undefined ? undefined : JSON.stringify(corpo),
-  });
+  // O fetch lança TypeError quando não alcança o servidor — API desligada, rede caída, CORS
+  // barrado. Sem este catch, a falha de transporte chega às telas como um erro genérico
+  // indistinguível de uma recusa da API, e a de login dizia "não foi possível entrar" para um
+  // backend simplesmente desligado. Vira um ApiError com código próprio para toda tela poder
+  // dizer a verdade.
+  let resposta: Response;
+  try {
+    resposta = await fetch(montarUrl(caminho, parametros), {
+      method: metodo,
+      headers: cabecalhos,
+      body: corpo === undefined ? undefined : JSON.stringify(corpo),
+    });
+  } catch {
+    throw new ApiError({
+      status: 0,
+      detail: 'Não foi possível falar com o servidor. Verifique se a API está no ar.',
+      codigo: 'SEM_CONEXAO',
+    });
+  }
 
   if (resposta.status === 401 && !publico && !jaRenovou) {
     if (await renovarToken()) {
@@ -152,7 +174,10 @@ export async function requisitar<T>(caminho: string, opcoes: Opcoes = {}): Promi
   const dados = texto ? JSON.parse(texto) : null;
 
   if (!resposta.ok) {
-    throw new ApiError({ status: resposta.status, ...(dados ?? {}) });
+    throw new ApiError(
+      { status: resposta.status, ...(dados ?? {}) },
+      resposta.headers.get('Retry-After'),
+    );
   }
   return dados as T;
 }

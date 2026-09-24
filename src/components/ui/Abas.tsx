@@ -40,10 +40,11 @@ export function AbasSegmentadas<T extends string>({
             type="button"
             onClick={() => onMudar(aba.valor)}
             className={cn(
-              'px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap',
+              'px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap',
+              'transition-all duration-180 ease-suave active:scale-[0.97]',
               ativa
                 ? 'bg-superficie dark:bg-white/10 text-texto dark:text-white shadow-card dark:shadow-none'
-                : 'text-texto-suave hover:text-texto dark:hover:text-white',
+                : 'text-texto-suave hover:text-texto hover:bg-superficie/60 dark:hover:bg-white/[0.04] dark:hover:text-white',
             )}
           >
             {aba.rotulo}

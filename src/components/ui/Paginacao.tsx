@@ -33,7 +33,7 @@ export const Paginacao: React.FC<{
         disabled={pagina <= 1}
         onClick={() => onMudar(Math.max(pagina - 1, 1))}
         aria-label="Página anterior"
-        className="p-1.5 rounded-lg border border-borda text-texto-suave disabled:opacity-35 disabled:cursor-not-allowed hover:bg-superficie-sutil transition-colors"
+        className="p-1.5 rounded-lg border border-borda text-texto-suave disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100 hover:bg-superficie-sutil hover:text-texto hover:border-borda-forte transition-all duration-120 ease-suave active:scale-95"
       >
         <ChevronLeft className="w-4 h-4" />
       </button>
@@ -45,7 +45,7 @@ export const Paginacao: React.FC<{
         disabled={pagina >= totalPaginas}
         onClick={() => onMudar(Math.min(pagina + 1, totalPaginas))}
         aria-label="Próxima página"
-        className="p-1.5 rounded-lg border border-borda text-texto-suave disabled:opacity-35 disabled:cursor-not-allowed hover:bg-superficie-sutil transition-colors"
+        className="p-1.5 rounded-lg border border-borda text-texto-suave disabled:opacity-35 disabled:cursor-not-allowed disabled:active:scale-100 hover:bg-superficie-sutil hover:text-texto hover:border-borda-forte transition-all duration-120 ease-suave active:scale-95"
       >
         <ChevronRight className="w-4 h-4" />
       </button>

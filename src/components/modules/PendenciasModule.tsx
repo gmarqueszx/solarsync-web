@@ -15,11 +15,11 @@ import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { ClienteModal } from '../common/ClienteModal';
+import { SelosCliente } from '../common/SelosCliente';
 import {
   Search,
   Plus,
   CheckCircle,
-  Play,
   Ban,
   MapPin,
   Calendar,
@@ -35,9 +35,8 @@ import { Ordenavel } from '../ui/Tabela';
 /** Ordem de trabalho: por resolver primeiro, resolvida e cancelada no fim. */
 const PESO_STATUS: Record<StatusPendencia, number> = {
   ABERTA: 0,
-  EM_ANDAMENTO: 1,
-  RESOLVIDA: 2,
-  CANCELADA: 3,
+  RESOLVIDA: 1,
+  CANCELADA: 2,
 };
 
 const VALORES_ORDENAVEIS = {
@@ -58,7 +57,6 @@ export const PendenciasModule: React.FC = () => {
     usuarios,
     criarPendencia,
     atualizarPendencia,
-    iniciarPendencia,
     resolverPendencia,
     cancelarPendencia,
     reabrirPendencia,
@@ -71,8 +69,8 @@ export const PendenciasModule: React.FC = () => {
    * recusa com `DEBITO_NAO_CONSULTADO` e `CLIENTE_COM_DEBITO`; aqui a tela antecipa o motivo
    * em vez de deixar a analista descobrir clicando.
    *
-   * É derivado, não status: a pendência travada continua ABERTA ou EM_ANDAMENTO — um status
-   * próprio viveria dessincronizado do débito, que muda quando o cliente paga.
+   * É derivado, não status: a pendência travada continua ABERTA — um status próprio viveria
+   * dessincronizado do débito, que muda quando o cliente paga.
    */
   const bloqueioDaResolucao = useMemo(() => {
     // Só o débito do tipo PENDENCIA conta aqui. O de homologação trava outra etapa, e
@@ -94,9 +92,12 @@ export const PendenciasModule: React.FC = () => {
   const itensPorPagina = 6;
 
   // Abre pela mais antiga sem resolver — a fila que envelhece é a que precisa de atenção.
+  // O cliente prioritário no topo da fila, antes da coluna escolhida — a mesma regra de
+  // todas as etapas, e a mesma que o `PrioridadePrimeiro` aplica na consulta do backend.
   const { ordenacao, ordenar, cabecalho } = useOrdenacao<PendenciaLista, ColunaPendencia>(
     VALORES_ORDENAVEIS,
     { campo: 'solicitadoEm', direcao: 'asc' },
+    (p) => p.cliente.prioridade,
   );
 
   // Modal states
@@ -196,7 +197,7 @@ export const PendenciasModule: React.FC = () => {
 
       // As duas filas derivadas só fazem sentido para pendência ainda por resolver: uma
       // pendência resolvida ou cancelada não está travada por nada.
-      const porResolver = p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO';
+      const porResolver = p.status === 'ABERTA';
       const matchStatus =
         filtroStatus === 'TODOS'
           ? true
@@ -268,8 +269,6 @@ export const PendenciasModule: React.FC = () => {
     switch (status) {
       case 'RESOLVIDA':
         return <Badge variant="success">{ROTULO_STATUS_PENDENCIA.RESOLVIDA}</Badge>;
-      case 'EM_ANDAMENTO':
-        return <Badge variant="warning">{ROTULO_STATUS_PENDENCIA.EM_ANDAMENTO}</Badge>;
       case 'CANCELADA':
         return <Badge variant="neutral">{ROTULO_STATUS_PENDENCIA.CANCELADA}</Badge>;
       case 'ABERTA':
@@ -310,7 +309,6 @@ export const PendenciasModule: React.FC = () => {
           >
             <option value="TODOS">Todos os Status</option>
             <option value="ABERTA">{ROTULO_STATUS_PENDENCIA.ABERTA}</option>
-            <option value="EM_ANDAMENTO">{ROTULO_STATUS_PENDENCIA.EM_ANDAMENTO}</option>
             <option value="RESOLVIDA">{ROTULO_STATUS_PENDENCIA.RESOLVIDA}</option>
             <option value="CANCELADA">{ROTULO_STATUS_PENDENCIA.CANCELADA}</option>
             <option value="TRAVADA_POR_DEBITO">Travadas por débito</option>
@@ -385,6 +383,7 @@ export const PendenciasModule: React.FC = () => {
                     <td className="py-3.5 px-6">
                       <div className="flex items-center justify-between gap-1.5">
                         <span className="font-medium text-slate-800">{p.cliente.nome}</span>
+                        <SelosCliente cliente={p.cliente} />
                         <button
                           type="button"
                           onClick={() => abrirEdicaoClientePorId(p.cliente.id)}
@@ -434,14 +433,14 @@ export const PendenciasModule: React.FC = () => {
                         O travamento por débito não muda o status: aparece ao lado dele. Cada
                         motivo diz a ação que destrava — consultar ou cobrar.
                       */}
-                      {(p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO') &&
+                      {p.status === 'ABERTA' &&
                         bloqueioDaResolucao(p.cliente.id) === 'DEBITO_ATIVO' && (
                           <div className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-rose-700">
                             <Lock className="w-3 h-3" />
                             travada: cliente com débito
                           </div>
                         )}
-                      {(p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO') &&
+                      {p.status === 'ABERTA' &&
                         bloqueioDaResolucao(p.cliente.id) === 'SEM_CONSULTA' && (
                           <div className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-sky-700">
                             <CreditCard className="w-3 h-3" />
@@ -453,15 +452,6 @@ export const PendenciasModule: React.FC = () => {
                       {/* Só as transições que a API aceita para o status atual da linha. */}
                       <div className="flex items-center justify-end gap-1.5">
                         {p.status === 'ABERTA' && (
-                          <button
-                            onClick={() => iniciarPendencia(p.id).catch(() => {})}
-                            title="Iniciar atendimento"
-                            className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                          >
-                            <Play className="w-4 h-4" />
-                          </button>
-                        )}
-                        {(p.status === 'ABERTA' || p.status === 'EM_ANDAMENTO') && (
                           <button
                             onClick={() => resolverPendencia(p.id).catch(() => {})}
                             disabled={bloqueioDaResolucao(p.cliente.id) !== null}
@@ -539,8 +529,7 @@ export const PendenciasModule: React.FC = () => {
               >
                 Fechar
               </button>
-              {(pendenciaSelecionada.status === 'ABERTA' ||
-                pendenciaSelecionada.status === 'EM_ANDAMENTO') && (
+              {pendenciaSelecionada.status === 'ABERTA' && (
                 <button
                   type="button"
                   onClick={() => setIsModalCancelaAberto(true)}
@@ -550,25 +539,7 @@ export const PendenciasModule: React.FC = () => {
                   Cancelar Pendência
                 </button>
               )}
-              {pendenciaSelecionada.status === 'ABERTA' && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await iniciarPendencia(pendenciaSelecionada.id);
-                      setIsModalDetalheAberto(false);
-                    } catch {
-                      /* toast de erro já exibido pelo contexto */
-                    }
-                  }}
-                  className="px-4 py-2 text-xs font-medium text-amber-800 bg-amber-100 hover:bg-amber-200 rounded-xl transition-colors flex items-center gap-1.5"
-                >
-                  <Play className="w-4 h-4" />
-                  Iniciar Atendimento
-                </button>
-              )}
-              {pendenciaSelecionada.status === 'ABERTA' ||
-              pendenciaSelecionada.status === 'EM_ANDAMENTO' ? (
+              {pendenciaSelecionada.status === 'ABERTA' ? (
                 <button
                   type="button"
                   onClick={async () => {
@@ -616,8 +587,7 @@ export const PendenciasModule: React.FC = () => {
               Por que o botão de concluir está desabilitado. Sem este aviso, o botão cinza
               pareceria bug — e cada motivo pede uma ação diferente de quem está olhando.
             */}
-            {(pendenciaSelecionada.status === 'ABERTA'
-              || pendenciaSelecionada.status === 'EM_ANDAMENTO')
+            {pendenciaSelecionada.status === 'ABERTA'
               && bloqueioDaResolucao(pendenciaSelecionada.cliente.id) === 'SEM_CONSULTA' && (
                 <div className="p-3 rounded-xl bg-sky-50 border border-sky-200 text-xs text-sky-900 flex gap-2">
                   <CreditCard className="w-4 h-4 shrink-0 mt-0.5" />
@@ -628,8 +598,7 @@ export const PendenciasModule: React.FC = () => {
                   </div>
                 </div>
               )}
-            {(pendenciaSelecionada.status === 'ABERTA'
-              || pendenciaSelecionada.status === 'EM_ANDAMENTO')
+            {pendenciaSelecionada.status === 'ABERTA'
               && bloqueioDaResolucao(pendenciaSelecionada.cliente.id) === 'DEBITO_ATIVO' && (
                 <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-900 flex gap-2">
                   <Lock className="w-4 h-4 shrink-0 mt-0.5" />

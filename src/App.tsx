@@ -42,29 +42,39 @@ const MainContent: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#F4F6F8]">
+    // `bg-fundo`, não `bg-[#F4F6F8]`: o token troca de valor no `.dark`, o hex cru dependia de
+    // um override por texto de classe no index.css.
+    <div className="flex h-screen overflow-hidden bg-fundo">
       <Sidebar />
 
-      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto scroll-smooth">
         <Header />
 
         <main className="p-6 md:p-8 max-w-[1440px] w-full mx-auto flex-1">
           {carregando ? (
-            <div className="flex items-center justify-center py-24 text-solar-neutral text-sm">
+            <div className="flex flex-col items-center justify-center gap-3 py-24 text-texto-suave text-sm">
+              <span
+                aria-hidden="true"
+                className="w-5 h-5 rounded-full border-2 border-borda-forte border-t-solar-primary animate-spin"
+              />
               Carregando dados…
             </div>
           ) : erro ? (
-            <div className="bg-white rounded-card shadow-card p-8 text-center">
-              <p className="text-sm text-red-700 mb-4">{erro}</p>
+            <div className="bg-superficie border border-borda dark:border-transparent rounded-card shadow-card p-8 text-center animate-entrar-tela">
+              <p className="text-sm text-rose-700 dark:text-rose-400 mb-4">{erro}</p>
               <button
                 onClick={() => recarregar()}
-                className="text-sm font-medium text-solar-primary hover:text-solar-primary-hover"
+                className="text-sm font-medium text-solar-primary hover:text-solar-primary-hover transition-colors"
               >
                 Tentar novamente
               </button>
             </div>
           ) : (
-            renderModulo()
+            /*
+              A `key` é o que faz a troca de módulo ter transição: sem ela o React reaproveita
+              o nó e a animação de entrada nunca reinicia — a tela trocava num corte seco.
+            */
+            <div key={moduloAtivo} className="animate-entrar-tela">{renderModulo()}</div>
           )}
         </main>
       </div>
@@ -80,10 +90,11 @@ const Autenticado: React.FC = () => {
 
   if (carregando) {
     return (
-      <div
-        className="min-h-screen flex items-center justify-center bg-solar-bg
-                   text-solar-neutral text-sm"
-      >
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-fundo text-texto-suave text-sm">
+        <span
+          aria-hidden="true"
+          className="w-5 h-5 rounded-full border-2 border-borda-forte border-t-solar-primary animate-spin"
+        />
         Verificando sessão…
       </div>
     );

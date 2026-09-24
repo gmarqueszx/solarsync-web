@@ -5,7 +5,8 @@ type Variante = 'primario' | 'secundario' | 'contorno' | 'fantasma' | 'perigo';
 type Tamanho = 'sm' | 'md' | 'icone';
 
 const VARIANTES: Record<Variante, string> = {
-  primario: 'bg-solar-primary text-white hover:bg-solar-primary-hover shadow-card',
+  primario:
+    'bg-solar-primary text-white hover:bg-solar-primary-hover shadow-card hover:shadow-card-hover',
   secundario:
     'bg-superficie-elevada text-texto border border-borda hover:border-borda-forte',
   contorno: 'border border-borda text-texto-suave hover:bg-superficie-sutil hover:text-texto',
@@ -38,9 +39,11 @@ export const Botao: React.FC<BotaoProps> = ({
   <button
     type={type}
     className={cn(
-      'inline-flex items-center justify-center rounded-xl font-medium transition-colors',
-      'disabled:opacity-45 disabled:cursor-not-allowed',
-      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-solar-primary/40',
+      'inline-flex items-center justify-center rounded-xl font-medium',
+      // `transition-all` em vez de só cor, e um afundar de 2% no clique: é o retorno tátil que
+      // faltava — sem ele não há como distinguir "cliquei" de "a página travou".
+      'transition-all duration-120 ease-suave active:scale-[0.97]',
+      'disabled:opacity-45 disabled:cursor-not-allowed disabled:active:scale-100',
       VARIANTES[variante],
       TAMANHOS[tamanho],
       className,

@@ -48,13 +48,24 @@ function comparar(a: ValorOrdenavel, b: ValorOrdenavel): number {
 }
 
 /**
- * @param valores como extrair de cada linha o valor de cada coluna ordenável
- * @param inicial coluna e direção de abertura da tela — normalmente a mais útil da fila,
- *                não a primeira da tabela
+ * @param valores     como extrair de cada linha o valor de cada coluna ordenável
+ * @param inicial     coluna e direção de abertura da tela — normalmente a mais útil da fila,
+ *                    não a primeira da tabela
+ * @param prioritario quais linhas ficam **sempre** no topo, qualquer que seja a coluna e a
+ *                    direção escolhidas. É o cliente marcado como prioridade, e está aqui, no
+ *                    hook, e não em cada módulo, porque a regra é a mesma em todas as etapas:
+ *                    "o cliente prioritário aparece no topo da etapa em que estiver". Repetida
+ *                    em seis telas, uma delas ficaria para trás.
+ *                    <p>
+ *                    É prefixo, não substituição — dentro de cada grupo a ordenação escolhida
+ *                    continua valendo. Espelha o `PrioridadePrimeiro` do backend, que faz o mesmo
+ *                    na consulta: as duas pontas precisam concordar, senão paginar a lista
+ *                    embaralharia a ordem entre uma página e outra.
  */
 export function useOrdenacao<T, C extends string>(
   valores: Record<C, (item: T) => ValorOrdenavel>,
   inicial: Ordenacao<C>,
+  prioritario?: (item: T) => boolean,
 ) {
   const [ordenacao, setOrdenacao] = useState<Ordenacao<C>>(inicial);
 
@@ -98,6 +109,13 @@ export function useOrdenacao<T, C extends string>(
 
     const sinal = ordenacao.direcao === 'asc' ? 1 : -1;
     return [...lista].sort((a, b) => {
+      if (prioritario) {
+        const prioA = prioritario(a);
+        const prioB = prioritario(b);
+        // Não multiplicado por `sinal`: inverter a coluna não pode mandar o cliente prioritário
+        // para o fim da lista, que é justamente onde ele não pode estar.
+        if (prioA !== prioB) return prioA ? -1 : 1;
+      }
       const valorA = extrair(a);
       const valorB = extrair(b);
       const vazioA = valorA === null || valorA === undefined || valorA === '';

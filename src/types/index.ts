@@ -46,6 +46,32 @@ export interface Usuario {
  */
 export type StatusTriagem = 'AGUARDANDO_VERIFICACAO' | 'COM_PENDENCIA' | 'SEM_PENDENCIA';
 
+/**
+ * De onde o cadastro veio. A triagem mostra isso porque a confiança nos dados é diferente: o
+ * cliente do CRM chega com cidade e vendedor normalizados contra as listas do cadastro, e o que
+ * não casou chega **nulo** — campo vazio ali significa "o CRM não sabia" e pede o preenchimento
+ * de alguém. Num cadastro manual, campo vazio é esquecimento.
+ */
+export type OrigemCliente = 'MANUAL' | 'CRM_NECTAR';
+
+/**
+ * Os selos ao lado do nome do cliente. Vêm **prontos do backend**, derivados da origem e da flag
+ * de banco — a tela não os monta. É o que garante, por construção, que rodar a importação de novo
+ * não duplica etiqueta: uma lista calculada a cada leitura não tem como acumular repetição.
+ */
+export type EtiquetaCliente = 'CRM' | 'BANCO';
+
+/**
+ * Por que o cliente foi posto na frente. `INSTALACAO_ADIANTADA` é o único que exige data: a usina
+ * já está montada, e a data informada vira a `dataInstalacao` do projeto — que é o que a etapa de
+ * vistoria lê e exige. Os outros são pedidos de pressa, sem fato de campo associado.
+ */
+export type MotivoPrioridade =
+  | 'INSTALACAO_ADIANTADA'
+  | 'PRAZO_CONTRATUAL'
+  | 'PRAZO_DO_CLIENTE'
+  | 'OUTRO';
+
 export interface Cliente {
   id: number;
   nome: string;
@@ -55,6 +81,23 @@ export interface Cliente {
   ucCoelba: string | null;
   telefone: string | null;
   statusTriagem: StatusTriagem;
+  origem: OrigemCliente;
+  /** Id da oportunidade no Nectar; serve para achar o negócio no CRM. Nulo no cadastro manual. */
+  nectarOportunidadeId: string | null;
+  /** Derivadas no servidor; a tela só desenha. */
+  etiquetas: EtiquetaCliente[];
+  /** Sobe o cliente ao topo da fila da etapa em que ele estiver, e das seguintes. */
+  prioridade: boolean;
+  prioridadeMotivo: MotivoPrioridade | null;
+  prioridadeObservacao: string | null;
+  prioridadeDefinidaEm: string | null;
+  prioridadeDefinidaPor: UsuarioResumo | null;
+  /** Só com motivo `INSTALACAO_ADIANTADA`. Já copiada para o projeto do cliente. */
+  prioridadeDataInstalacao: string | null;
+  /** Fluxo curto: entrada → pendência → resolvida → fim. Nenhum projeto nasce. */
+  somentePendencia: boolean;
+  /** Projeto pago por financiamento: muda só a etapa de destino no Nectar. */
+  banco: boolean;
 }
 
 export interface ClienteResumo {
@@ -62,6 +105,9 @@ export interface ClienteResumo {
   nome: string;
   cidade: string | null;
   ucCoelba: string | null;
+  /** As duas do resumo que mudam o que a tela **faz** com a linha, não só o que mostra. */
+  prioridade: boolean;
+  somentePendencia: boolean;
 }
 
 /**
@@ -71,9 +117,32 @@ export interface ClienteResumo {
  *
  * Fora do tipo: `id`, atribuído pela API, e `statusTriagem`, que só muda pelos endpoints de
  * ação (`/sem-pendencia`, `/reverificar`) — corrigir o telefone não pode, de passagem, apagar
- * o fato de que a Coelba já foi consultada.
+ * o fato de que a Coelba já foi consultada. Fora também `origem` e `nectarOportunidadeId`, que
+ * são a procedência do registro: editar o cadastro não pode fazer um cliente do CRM passar por
+ * cadastro manual.
  */
-export type DadosCliente = Omit<Cliente, 'id' | 'statusTriagem'>;
+export type DadosCliente = Pick<
+  Cliente,
+  | 'nome'
+  | 'cidade'
+  | 'vendedor'
+  | 'dataPagamento'
+  | 'ucCoelba'
+  | 'telefone'
+  | 'somentePendencia'
+  | 'banco'
+>;
+
+/**
+ * O corpo de `POST /api/clientes/{id}/prioridade`. `dataInstalacao` é obrigatória só com
+ * `INSTALACAO_ADIANTADA` — a API responde 409 `PRIORIDADE_SEM_INSTALACAO` sem ela, e o formulário
+ * a exige antes de chegar lá.
+ */
+export interface DadosPrioridade {
+  motivo: MotivoPrioridade;
+  observacao?: string | null;
+  dataInstalacao?: string | null;
+}
 
 // ---------- Pendência ----------
 
@@ -89,7 +158,13 @@ export type TipoPendencia =
   | 'ADEQUACAO_TECNICA'
   | 'OUTRA';
 
-export type StatusPendencia = 'ABERTA' | 'EM_ANDAMENTO' | 'RESOLVIDA' | 'CANCELADA';
+/**
+ * Um único estado ativo. Apontar a pendência na triagem do cliente já é iniciá-la — não existe
+ * pendência identificada que ainda não foi solicitada —, então o antigo `EM_ANDAMENTO` e o
+ * botão de "play" que levava até ele saíram: era um clique que não mudava nada, já que o tempo
+ * de resolução sempre saiu de `solicitadoEm`, gravado na criação.
+ */
+export type StatusPendencia = 'ABERTA' | 'RESOLVIDA' | 'CANCELADA';
 
 export interface Pendencia {
   id: number;
@@ -109,6 +184,7 @@ export interface PendenciaResumo {
   id: number;
   clienteId: number;
   clienteNome: string;
+  clientePrioritario: boolean;
   tipo: TipoPendencia;
   status: StatusPendencia;
   solicitadoEm: string;
@@ -137,6 +213,12 @@ export interface Debito {
   /** Quando o débito foi constatado; é o começo do relógio de `diasParado`. */
   detectadoEm: string | null;
   quitadoEm: string | null;
+  /**
+   * Vencimento da próxima conta, informado na consulta que constatou a quitação. Nulo é
+   * **"não informado"**, que é diferente de "não existe próxima" — a tela diz isso por extenso em
+   * vez de inventar uma data.
+   */
+  proximoVencimento: string | null;
   /** Nulo quando não está ATIVO — nulo é "não está parado", não "parado há zero dias". */
   diasParado: number | null;
   consultadoPor: UsuarioResumo | null;
@@ -180,6 +262,8 @@ export interface ProjetoResumo {
   id: number;
   clienteId: number;
   clienteNome: string;
+  clientePrioritario: boolean;
+  clienteBanco: boolean;
   tipoProjeto: TipoProjeto;
   status: StatusProjeto;
   analistaResponsavelId: number | null;
@@ -380,7 +464,6 @@ export const ROTULO_TIPO_PENDENCIA: Record<TipoPendencia, string> = {
 
 export const ROTULO_STATUS_PENDENCIA: Record<StatusPendencia, string> = {
   ABERTA: 'Aberta',
-  EM_ANDAMENTO: 'Em andamento',
   RESOLVIDA: 'Resolvida',
   CANCELADA: 'Cancelada',
 };
@@ -425,6 +508,25 @@ export const ROTULO_TIPO_DEBITO_CURTO: Record<TipoDebito, string> = {
 };
 
 export const TIPOS_DEBITO: TipoDebito[] = ['PENDENCIA', 'HOMOLOGACAO'];
+
+export const MOTIVOS_PRIORIDADE: MotivoPrioridade[] = [
+  'INSTALACAO_ADIANTADA',
+  'PRAZO_CONTRATUAL',
+  'PRAZO_DO_CLIENTE',
+  'OUTRO',
+];
+
+export const ROTULO_MOTIVO_PRIORIDADE: Record<MotivoPrioridade, string> = {
+  INSTALACAO_ADIANTADA: 'Instalação adiantada',
+  PRAZO_CONTRATUAL: 'Prazo menor em contrato',
+  PRAZO_DO_CLIENTE: 'Prazo específico do cliente',
+  OUTRO: 'Outra situação',
+};
+
+export const ROTULO_ETIQUETA_CLIENTE: Record<EtiquetaCliente, string> = {
+  CRM: 'CRM',
+  BANCO: 'Banco',
+};
 
 export const ROTULO_STATUS_DESLIGAMENTO: Record<StatusDesligamento, string> = {
   NAO_SOLICITADO: 'A solicitar',

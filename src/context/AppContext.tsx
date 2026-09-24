@@ -6,6 +6,8 @@ import {
   debitosApi,
   pendenciasApi,
   projetosApi,
+  Referencias,
+  referenciasApi,
   unificacoesApi,
   usuariosApi,
   vistoriasApi,
@@ -13,6 +15,7 @@ import {
 import {
   Cliente,
   DadosCliente,
+  DadosPrioridade,
   Debito,
   KPIStats,
   ModuloNavegacao,
@@ -45,6 +48,8 @@ interface AppContextType {
 
   clientes: Cliente[];
   usuarios: UsuarioResumo[];
+  /** Listas fechadas do cadastro (municípios da Bahia, vendedores), servidas pelo backend. */
+  referencias: Referencias;
   pendencias: PendenciaLista[];
   debitos: Debito[];
   projetos: ProjetoLista[];
@@ -62,6 +67,13 @@ interface AppContextType {
   atualizarCliente: (id: number, dados: DadosCliente) => Promise<void>;
   marcarSemPendencia: (id: number) => Promise<void>;
   reverificarCliente: (id: number) => Promise<void>;
+  /**
+   * Adianta o cliente. Chamar de novo revisa o motivo — não é preciso remover antes. Com motivo
+   * `INSTALACAO_ADIANTADA` a data vai junto e vira a `dataInstalacao` do projeto, que é o que a
+   * etapa de vistoria exige; não é um segundo campo de data.
+   */
+  marcarPrioridade: (id: number, dados: DadosPrioridade) => Promise<void>;
+  removerPrioridade: (id: number) => Promise<void>;
 
   criarPendencia: (dados: {
     clienteId: number;
@@ -78,15 +90,19 @@ interface AppContextType {
     id: number,
     dados: { tipo: TipoPendencia; responsavelId?: number | null; observacao?: string | null },
   ) => Promise<void>;
-  iniciarPendencia: (id: number) => Promise<void>;
   resolverPendencia: (id: number, observacao?: string) => Promise<void>;
   cancelarPendencia: (id: number, motivo: string) => Promise<void>;
   reabrirPendencia: (id: number) => Promise<void>;
 
+  /**
+   * `proximoVencimento` só acompanha a quitação: é a data da próxima conta vista na mesma
+   * consulta. O servidor a ignora com débito ATIVO, porque aí não há "próxima" — há a atual.
+   */
   registrarConsultaDebito: (
     clienteId: number,
     tipo: TipoDebito,
     status: StatusDebito,
+    proximoVencimento?: string | null,
   ) => Promise<void>;
 
   criarProjeto: (dados: {
@@ -96,12 +112,18 @@ interface AppContextType {
     potenciaKwp?: number | null;
   }) => Promise<void>;
   aguardarEnvioProjeto: (id: number) => Promise<void>;
+  /**
+   * O `numeroSolicitacao` vem **antes** da `dataArt` e não é opcional de propósito: ele é
+   * obrigatório na API desde 17/09/2026 (é a chave que casa o retorno por e-mail da Coelba com
+   * o projeto), e assim o próprio TypeScript recusa a chamada sem ele — em vez de descobrirmos
+   * com um 400 em produção.
+   */
   encaminharProjeto: (
     id: number,
+    numeroSolicitacao: string,
     dataArt?: string | null,
-    numeroSolicitacao?: string | null,
   ) => Promise<void>;
-  reencaminharProjeto: (id: number, numeroSolicitacao?: string | null) => Promise<void>;
+  reencaminharProjeto: (id: number, numeroSolicitacao: string) => Promise<void>;
   aprovarProjeto: (id: number) => Promise<void>;
   reprovarProjeto: (id: number, motivo: string) => Promise<void>;
   registrarInstalacao: (id: number, dataInstalacao: string) => Promise<void>;
@@ -143,6 +165,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [usuarios, setUsuarios] = useState<UsuarioResumo[]>([]);
+  /**
+   * Listas fechadas do cadastro, servidas pelo backend. Vinham de `src/data/constantes.ts`;
+   * passaram para o servidor porque a importação do Nectar normaliza cidade e vendedor contra o
+   * mesmo padrão, e duas cópias divergem. Vazias até a primeira carga — os campos de seleção
+   * aparecem sem opção por um instante, o que é melhor que uma cópia local que envelhece.
+   */
+  const [referencias, setReferencias] = useState<Referencias>({
+    municipios: [],
+    vendedores: [],
+  });
   const [pendencias, setPendencias] = useState<PendenciaLista[]>([]);
   const [debitos, setDebitos] = useState<Debito[]>([]);
   const [projetos, setProjetos] = useState<ProjetoLista[]>([]);
@@ -182,6 +214,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         respostaProjetos,
         respostaVistorias,
         respostaUnificacoes,
+        respostaReferencias,
       ] = await Promise.all([
         clientesApi.listar(),
         usuariosApi.lookup(),
@@ -190,14 +223,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         projetosApi.listar(),
         vistoriasApi.listar(),
         unificacoesApi.listar(),
+        referenciasApi.listar(),
       ]);
 
       const clientesCarregados = respostaClientes.conteudo;
       const porClienteId = new Map(clientesCarregados.map((c) => [c.id, c]));
       const porUsuarioId = new Map(respostaUsuarios.map((u) => [u.id, u]));
 
-      /** Cliente que a listagem referencia mas que não veio na página de clientes. */
-      const clienteDe = (id: number, nome: string): Cliente =>
+      /**
+       * Cliente que a listagem referencia mas que não veio na página de clientes.
+       *
+       * `prioritario` e `banco` chegam achatados na própria linha da listagem, então o palpite
+       * some justamente para as duas coisas que mudam o comportamento da tela — a posição na fila
+       * e a etapa de destino no Nectar.
+       */
+      const clienteDe = (
+        id: number,
+        nome: string,
+        prioritario = false,
+        banco = false,
+      ): Cliente =>
         porClienteId.get(id) ?? {
           id,
           nome,
@@ -206,18 +251,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           dataPagamento: null,
           ucCoelba: null,
           telefone: null,
+          etiquetas: banco ? ['BANCO'] : [],
+          prioridade: prioritario,
+          prioridadeMotivo: null,
+          prioridadeObservacao: null,
+          prioridadeDefinidaEm: null,
+          prioridadeDefinidaPor: null,
+          prioridadeDataInstalacao: null,
+          // Sem a página do cliente não se sabe se o fluxo dele é curto; `false` é o palpite que
+          // não esconde etapa nenhuma de ninguém.
+          somentePendencia: false,
+          banco,
           // Cliente fora da página carregada: não se sabe a triagem dele. COM_PENDENCIA é o
           // palpite honesto — ele aparece numa listagem de pendência/projeto, então foi
           // checado —, e nunca o coloca por engano na fila de "falta checar".
           statusTriagem: 'COM_PENDENCIA',
+          // Cliente que não veio na página: não se sabe a procedência, e MANUAL é o palpite que
+          // não afirma nada de errado — o selo de CRM só aparece quando há o id do Nectar.
+          origem: 'MANUAL',
+          nectarOportunidadeId: null,
         };
 
       setClientes(clientesCarregados);
       setUsuarios(respostaUsuarios);
+      setReferencias(respostaReferencias);
       setPendencias(
         respostaPendencias.conteudo.map((p: PendenciaResumo) => ({
           id: p.id,
-          cliente: clienteDe(p.clienteId, p.clienteNome),
+          cliente: clienteDe(p.clienteId, p.clienteNome, p.clientePrioritario),
           tipo: p.tipo,
           status: p.status,
           solicitadoEm: p.solicitadoEm,
@@ -229,7 +290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setProjetos(
         respostaProjetos.conteudo.map((p: ProjetoResumo) => ({
           id: p.id,
-          cliente: clienteDe(p.clienteId, p.clienteNome),
+          cliente: clienteDe(p.clienteId, p.clienteNome, p.clientePrioritario, p.clienteBanco),
           tipoProjeto: p.tipoProjeto,
           status: p.status,
           analistaResponsavel: p.analistaResponsavelId
@@ -294,6 +355,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     clientes,
     usuarios,
+    referencias,
     pendencias,
     debitos,
     projetos,
@@ -320,12 +382,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reverificarCliente: (id) =>
       executar(() => clientesApi.reverificar(id), 'Cliente devolvido à fila de verificação'),
 
+    marcarPrioridade: (id, dados) =>
+      executar(
+        () => clientesApi.marcarPrioridade(id, dados),
+        dados.motivo === 'INSTALACAO_ADIANTADA'
+          ? 'Prioridade registrada — a data de instalação foi para o projeto e a vistoria já '
+            + 'pode ser solicitada quando ele for aprovado'
+          : 'Prioridade registrada — o cliente sobe ao topo da fila em que estiver',
+      ),
+    removerPrioridade: (id) =>
+      executar(
+        () => clientesApi.removerPrioridade(id),
+        'Prioridade encerrada — o cliente volta à ordem normal',
+      ),
+
     criarPendencia: (dados) =>
-      executar(() => pendenciasApi.criar(dados), 'Pendência aberta'),
+      // "Aberta" já é "em andamento": apontar a pendência na triagem é iniciar a solicitação.
+      executar(() => pendenciasApi.criar(dados), 'Pendência aberta — solicitação em andamento'),
     atualizarPendencia: (id, dados) =>
       executar(() => pendenciasApi.atualizar(id, dados), 'Observações salvas'),
-    iniciarPendencia: (id) =>
-      executar(() => pendenciasApi.iniciar(id), 'Pendência em andamento'),
     resolverPendencia: (id, observacao) =>
       executar(
         () => pendenciasApi.resolver(id, observacao),
@@ -336,9 +411,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reabrirPendencia: (id) =>
       executar(() => pendenciasApi.reabrir(id), 'Pendência reaberta'),
 
-    registrarConsultaDebito: (clienteId, tipo, status) =>
+    registrarConsultaDebito: (clienteId, tipo, status, proximoVencimento) =>
       executar(
-        () => debitosApi.registrarConsulta(clienteId, tipo, status),
+        () => debitosApi.registrarConsulta(clienteId, tipo, status, undefined, proximoVencimento),
         status === 'ATIVO'
           ? `Débito registrado — ${
               tipo === 'PENDENCIA' ? 'trava a pendência' : 'trava a homologação'
@@ -349,7 +424,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     criarProjeto: (dados) => executar(() => projetosApi.criar(dados), 'Projeto criado'),
     aguardarEnvioProjeto: (id) =>
       executar(() => projetosApi.aguardarEnvio(id), 'Projeto aguardando envio'),
-    encaminharProjeto: (id, dataArt, numeroSolicitacao) =>
+    encaminharProjeto: (id, numeroSolicitacao, dataArt) =>
       executar(
         () => projetosApi.encaminhar(id, dataArt, undefined, numeroSolicitacao),
         'Projeto encaminhado à Coelba',

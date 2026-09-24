@@ -13,6 +13,7 @@ import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { ClienteModal } from '../common/ClienteModal';
+import { SeloPrioridade } from '../common/SelosCliente';
 import { Botao } from '../ui/Button';
 import {
   Search,
@@ -67,9 +68,12 @@ export const VistoriaModule: React.FC = () => {
   const itensPorPagina = 6;
 
   // Abre pela solicitação mais antiga: é a que está esperando retorno há mais tempo.
+  // O cliente prioritário no topo da fila, antes da coluna escolhida — a mesma regra de
+  // todas as etapas, e a mesma que o `PrioridadePrimeiro` aplica na consulta do backend.
   const { ordenacao, ordenar, cabecalho } = useOrdenacao<Vistoria, ColunaVistoria>(
     VALORES_ORDENAVEIS,
     { campo: 'dataSolicitacao', direcao: 'asc' },
+    (v) => v.cliente.prioridade,
   );
 
   // Modals
@@ -108,6 +112,18 @@ export const VistoriaModule: React.FC = () => {
       ),
     [projetos, vistorias],
   );
+
+  /**
+   * A fila de projetos esperando vistoria também é uma etapa, e o cliente prioritário também
+   * sobe nela. Ordenada aqui e não pelo `useOrdenacao` porque esta lista não tem cabeçalho
+   * clicável — é um painel de chegada, não uma tabela de trabalho.
+   *
+   * O prioritário por instalação adiantada chega aqui já com a data preenchida (ela desceu do
+   * pedido de prioridade para o projeto), então o botão de solicitar vistoria já vem liberado —
+   * que é exatamente o que o requisito pede.
+   */
+  const porPrioridade = <T extends { cliente: { prioridade: boolean } }>(lista: T[]): T[] =>
+    [...lista].sort((a, b) => Number(b.cliente.prioridade) - Number(a.cliente.prioridade));
 
   /**
    * A fila da etapa 4: projeto homologado pela Coelba e ainda sem vistoria. É aqui que o
@@ -285,12 +301,15 @@ export const VistoriaModule: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
-                {filaAguardandoVistoria.map(p => {
+                {porPrioridade(filaAguardandoVistoria).map(p => {
                   const diasAprovado = diasDesde(p.dataAprovacao);
                   return (
                     <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-3.5 px-6">
-                        <div className="font-medium text-slate-800">{p.cliente.nome}</div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-medium text-slate-800">{p.cliente.nome}</span>
+                          <SeloPrioridade prioridade={p.cliente.prioridade} />
+                        </div>
                         <div className="text-[11px] text-[#424342] flex items-center gap-2 mt-0.5">
                           <span className="flex items-center gap-1">
                             <MapPin className="w-3 h-3 text-slate-400" />
@@ -395,6 +414,7 @@ export const VistoriaModule: React.FC = () => {
                     <td className="py-3.5 px-6">
                       <div className="flex items-center justify-between gap-1.5">
                         <span className="font-medium text-slate-800">{v.cliente.nome}</span>
+                      <SeloPrioridade prioridade={v.cliente.prioridade} />
                         <button
                           type="button"
                           onClick={() => abrirEdicaoClientePorId(v.cliente.id)}
