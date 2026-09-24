@@ -1,0 +1,11 @@
+# O contexto de build só precisa do manifesto, da configuração e de src/. node_modules é grande
+# e seria descartado pelo `npm ci` de qualquer jeito; dist/ é o que o build produz.
+
+.git
+.gitignore
+node_modules
+dist
+.env
+.env.*
+!.env.example
+CLAUDE.md

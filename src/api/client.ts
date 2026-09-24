@@ -6,7 +6,16 @@
  * renovação automática, o analista seria deslogado no meio do trabalho quatro vezes por hora.
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
+/**
+ * Vazio em produção porque a API é servida no MESMO domínio que esta tela: o proxy reverso
+ * entrega os estáticos e manda `/api/*` para o backend. Requisição de mesma origem não tem CORS,
+ * não tem preflight e não tem uma lista de origens no servidor para alguém errar.
+ *
+ * Em desenvolvimento o Vite serve na 5173 e o backend na 8080 — origens diferentes de verdade —,
+ * daí o endereço explícito. `VITE_API_URL` continua existindo para apontar para outro servidor
+ * quando for preciso, e segue sendo lida NO BUILD, não em tempo de execução.
+ */
+const BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8080' : '');
 
 const CHAVE_ACCESS = 'solarsync.accessToken';
 const CHAVE_REFRESH = 'solarsync.refreshToken';
@@ -119,7 +128,9 @@ interface Opcoes {
 }
 
 function montarUrl(caminho: string, parametros?: Opcoes['parametros']): string {
-  const url = new URL(`${BASE_URL}${caminho}`);
+  // A origem da página como base: é o que faz `BASE_URL` vazio virar caminho relativo em vez de
+  // estourar ("Invalid URL"). Com BASE_URL absoluto, ele ganha da base e nada muda.
+  const url = new URL(`${BASE_URL}${caminho}`, window.location.origin);
   Object.entries(parametros ?? {}).forEach(([chave, valor]) => {
     if (valor !== undefined && valor !== null && valor !== '') {
       url.searchParams.append(chave, String(valor));

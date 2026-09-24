@@ -550,32 +550,42 @@ API, não copiar a lógica de datas para cá.
 
 ## Deploy
 
-Escrito em 24/09/2026, junto com o do backend (seção 14 do CLAUDE.md de lá, e o runbook em
-`deploy/README.md` naquele repositório).
+Escrito em 24/09/2026 e **refeito no mesmo dia** (ver abaixo). O runbook é o `deploy/README.md`
+do repositório do backend; a seção 14 do `CLAUDE.md` de lá registra as decisões.
 
-O frontend vai para o **Cloudflare Pages**, não para o VPS onde a API roda. Ele é `vite build` —
-arquivos estáticos —, e o Pages os serve com TLS, CDN e build automático a cada push, de graça.
-Pôr um nginx no servidor para servir três arquivos seria mais coisa para manter, e ainda deixaria
-o frontend fora do ar toda vez que o VPS reiniciasse por causa da API.
+Esta interface e a API são servidas **do mesmo domínio**: o Caddy entrega os estáticos em `/` e
+faz proxy de `/api/*` para o backend. A imagem que o Caddy roda sai **deste** repositório — o
+`Dockerfile` daqui constrói o `dist` com Node e o copia para dentro de um `caddy:2-alpine`. A
+configuração do Caddy não fica aqui: ela é do outro repositório, montada pelo compose. Este
+repositório sabe construir a si mesmo; o outro sabe o desenho da pilha.
 
-| Campo no painel do Pages | Valor |
-|---|---|
-| Build command | `npm run build` |
-| Output directory | `dist` |
-| `VITE_API_URL` | `https://api.solarsync.conectsol.com` |
+⚠️ **O desenho anterior mandava esta tela para o Cloudflare Pages**, com a API num subdomínio
+`api.`. O Pages dava CDN e build automático de graça, mas comprava um problema: duas origens
+significam CORS, e errar a lista de origens no servidor é o modo de falhar mais confuso que
+existe aqui — a tela carrega perfeitamente, nenhuma requisição funciona, e o erro só aparece no
+console do navegador, porque do lado da API a requisição nem chega a ser processada. O CDN, em
+troca, quase não paga: acelera só o primeiro carregamento, já que toda interação depois vai ao
+servidor de qualquer jeito.
 
-Dois pontos que custam tempo quando esquecidos:
+O que isso exigiu em `src/api/client.ts`:
 
-- ⚠️ **`VITE_API_URL` é lida no build, não em tempo de execução.** O Vite a substitui por
-  literal dentro do bundle (`src/api/client.ts`). Trocar a variável no painel não muda nada até
-  um "Retry deployment" — o sintoma é a tela nova continuar chamando o endereço antigo.
-- ⚠️ **A origem publicada precisa estar em `SOLARSYNC_CORS_ORIGENS` no servidor**, exatamente
-  como o navegador a vê: com `https://` e sem barra no fim. Errar isso é o motivo nº 1 de "a tela
-  carrega e nenhuma requisição funciona" — e o erro aparece só no console do navegador, porque
-  para a API a requisição nem chegou a ser processada.
+- **`BASE_URL` é vazio em produção** — `import.meta.env.VITE_API_URL ?? (DEV ?
+  'http://localhost:8080' : '')`. Em desenvolvimento o Vite serve na 5173 e o backend na 8080,
+  que são origens diferentes de verdade, daí o endereço explícito continuar lá.
+- **`montarUrl` passa `window.location.origin` como base** do `new URL`. Sem a base, um caminho
+  relativo estoura com "Invalid URL"; com ela, `BASE_URL` vazio vira caminho relativo e um
+  `BASE_URL` absoluto continua ganhando. É a linha que faz as duas situações conviverem.
+- `VITE_API_URL` continua existindo e continua sendo lida **no build**, não em tempo de execução.
+  A diferença é que agora ninguém precisa dela — e por isso o `Dockerfile` não a define.
 
-Não há rota no cliente (a navegação entre módulos é estado, não URL), então o Pages não precisa
-de regra de reescrita para SPA.
+O Caddy faz `try_files {path} /index.html`. Hoje nada depende disso, porque a navegação entre
+módulos é estado e não URL; está lá para o dia em que entrar um roteador, senão o sintoma seria
+404 em toda página recarregada — e ele não apontaria para o servidor.
+
+⚠️ O `index.html` vai com `Cache-Control: no-cache` e os arquivos de `/assets` com `immutable`.
+É o par que faz um deploy aparecer na hora: o index é quem aponta para os bundles com hash no
+nome, então um index velho em cache serve a versão anterior do sistema inteiro — e a pessoa vê um
+bug já corrigido sem ter como saber por quê.
 
 ## Pendente
 
