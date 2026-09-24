@@ -184,6 +184,49 @@ backend** — não havia como cadastrar o primeiro cliente (era o estado até 04
   criando a pendência e marcando o cliente como `COM_PENDENCIA` automaticamente, sem precisar navegar
   ao módulo de Pendências e reinserir os dados manualmente).
 
+### Os selos ao lado do nome do cliente (`common/SelosCliente`)
+
+Quatro selos, num componente só porque aparecem em seis módulos: **Prioridade** (âmbar, seta para
+cima), **Só pendência** (cinza), **CRM** e **Banco**. Cada um só aparece quando diz algo que muda
+o trabalho de quem olha — selo em toda linha vira ruído e deixa de ser informação.
+
+⚠️ **`CRM` e `Banco` vêm prontas do backend**, em `cliente.etiquetas`. A tela não as monta, e é
+isso que torna impossível violar o "não duplicar etiquetas caso a operação seja executada
+novamente": uma lista derivada a cada leitura não tem como acumular repetição.
+
+A prioridade é **âmbar com seta para cima**, não vermelha: a leitura precisa ser "este subiu na
+fila", não "este tem um problema", que é o que a paleta de erro diria. O `title` traz motivo,
+data de instalação e observação — é o que decide se a prioridade ainda vale, e quem revisa a fila
+precisa disso sem abrir o cadastro.
+
+### Prioridade de cliente (22/09/2026)
+
+O botão de seta para cima em cada linha de Clientes abre o modal de prioridade; um segundo botão
+(seta para baixo) encerra. Chamar de novo **revisa** o motivo — não é preciso remover antes, e o
+formulário reabre no que já estava valendo, porque revisar é o caso mais comum depois de criar e
+obrigar a redigitar o motivo convidaria a trocá-lo por engano.
+
+⚠️ **A data de instalação só aparece com o motivo "Instalação adiantada"**, e ali é obrigatória —
+o backend recusa com 409 `PRIORIDADE_SEM_INSTALACAO`. Ela **não é um segundo campo de data de
+instalação**: o servidor a copia para `projeto.dataInstalacao`, que é o campo que a etapa de
+Vistoria já lia e exigia. Consequência visível: o cliente prioritário por instalação chega à fila
+da Vistoria com a data preenchida e o botão de solicitar já liberado.
+
+A ordenação é o resto da regra, e está no `useOrdenacao` — ver "Ordenação das listagens".
+
+### Fluxo "somente pendência" (22/09/2026)
+
+Dois checkboxes no `ClienteModal` desenham o fluxo do cliente: **somente pendência** (avulso do
+gestor: entrada → pendência → resolvida → fim, sem projeto) e **Banco** (financiamento). Ficam no
+cadastro e não num endpoint de ação porque não são etapas — são o desenho do fluxo daquele
+cliente, decidido na entrada. E **desmarcar "somente pendência" é o caminho** para devolver ao
+fluxo completo o avulso que virou projeto de verdade.
+
+Na listagem, o cliente avulso com a pendência já resolvida mostra **"Fluxo concluído"** na coluna
+de situação. O rótulo é necessário: sem ele, "nenhuma pendência aberta e nenhum projeto" seria
+indistinguível de "ninguém fez nada", que é o oposto do que aconteceu. É derivado das pendências
+que o `AppContext` já carrega — pedir isso à API custaria uma contagem por linha da listagem.
+
 ### Selo "CRM": de onde o cadastro veio (17/09/2026)
 
 Desde que o backend importa clientes do Nectar automaticamente (seção 9 do CLAUDE.md do backend),
@@ -321,6 +364,80 @@ lista; Inter 400/500.
 **Modo escuro** (`ThemeContext.tsx`): persistido em `localStorage` (`solarsync_tema`), detecta a
 preferência do sistema, alternância no Header e no Login.
 
+### Movimento (19/09/2026)
+
+Fora da tela de login, o sistema não tinha movimento: quatro usos de `animate-*` no projeto
+inteiro, e cerca de um em cada cinco `hover:` sem `transition`. Trocar de módulo era um corte
+seco. O vocabulário agora está em três lugares, e só três:
+
+- **`tailwind.config.js`** — as curvas (`ease-suave` para o que entra, `ease-saida` para o que
+  sai), os três tempos (`duration-120` toque, `duration-180` estado, `duration-320` tela) e os
+  keyframes: `esmaecer`/`sair-esmaecer`, `entrar-tela`, `entrar-dialogo`/`sair-dialogo`,
+  `entrar-aviso`/`sair-aviso`, `desenhar`, `crescer-x`, `girar-entrada`.
+- **`src/index.css`** — o que precisa de CSS de verdade: a cascata `.escalonar` (atraso por
+  `nth-child`, 40ms por item), o realce `.elevar-no-hover`, o anel de foco único em
+  `:focus-visible`, e a **transição padrão** de `a, button, summary, tr, input, select,
+  textarea, [role=button], [role=tab]`.
+- os componentes, que só declaram exceções.
+
+⚠️ Três armadilhas que esta implementação encontrou, e que a próxima repetiria:
+
+1. **A transição padrão está em `:where(...)`, de especificidade zero.** É o que deixa qualquer
+   componente continuar declarando `transition-colors duration-300` e vencer sem `!important`.
+   Num seletor comum ela disputaria com as utilitárias do Tailwind e o resultado dependeria da
+   ordem no CSS gerado.
+2. **`@keyframes entrar-cartao` vive no `index.css`, não no config.** O Tailwind só emite os
+   keyframes de uma animação quando a utilitária `animate-*` correspondente aparece no markup —
+   e essa é usada por uma classe CSS (`.escalonar`). Declarada só no config, a regra apontava
+   para um `@keyframes` inexistente e a cascata não acontecia, **sem erro em lugar nenhum**.
+   Conferido no CSS compilado (`npm run build`, `grep @keyframes dist/assets/*.css`).
+3. **O guarda de `prefers-reduced-motion` é global**, e usa `animation-duration: 0.01ms` em vez
+   de `animation: none`. Com `fill-mode: both`, `none` devolveria o elemento ao estado inicial —
+   opacidade zero —, escondendo metade da interface de quem pediu menos movimento. O bloco antigo
+   cobria só `.tela-login`, então tudo acrescentado fora dela ignorava a preferência.
+
+Diálogo e aviso ficam montados durante a saída (`Modal` tem estado `fechando`; `Toast` tem o
+seu): antes havia entrada animada e nenhuma saída, e salvar um formulário fazia a janela piscar
+para fora.
+
+### Os gráficos do dashboard (`ui/Graficos.tsx`)
+
+⚠️ Os dois eram desenhados à mão dentro do `DashboardModule`, e os dois **mentiam**:
+
+- o de ritmo tinha um `path` SVG de coordenadas fixas no código — a curva era sempre a mesma por
+  mais que os números mudassem. Os quatro pontos calculavam um valor a partir dos KPIs, e o valor
+  não era usado em lugar nenhum: só a bolinha era desenhada, sempre na mesma altura. Era
+  decoração com cara de dado, num painel gerencial;
+- o de tipos pintava a **maior** barra de branco — invisível no tema claro (fundo branco) e
+  invisível no escuro também, porque o `index.css` reescreve `.bg-white` para a cor da
+  superfície. E dava 12% de altura mínima a toda barra, então "zero" desenhava um toco igual
+  ao de "um".
+
+O que substituiu, e por quê:
+
+- **`GraficoLinhas`** — duas séries reais, tiradas de `projeto.dataAprovacao` e
+  `projeto.dataEncaminhado` pelos baldes de `src/utils/series.ts`. Semanal até ~3 meses de
+  recorte, mensal acima disso (com "Todos", 52 colunas semanais viram uma serra ilegível). Tem
+  legenda, eixo Y, cruz de leitura com tooltip, navegação por setas do teclado e um `<details>`
+  "Ver números" com a tabela — nenhum valor fica trancado atrás do ponteiro do mouse.
+- **`GraficoBarrasHorizontais`** — deitado porque os rótulos são longos ("Ampliação de Projeto
+  Existente") e em coluna eram cortados. **Uma cor só**: categoria nominal não tem ordem, e
+  pintar cada barra de um tom codificaria duas vezes o que o tamanho já diz.
+- **`Medidor`** — substituiu a barra verde-contra-âmbar da "Carga por Analista". Aquele par tem
+  separação de 3,1 em deuteranopia: a barra inteira virava um bloco só para quem não distingue
+  verde de vermelho, e a barra é o que se olha antes de ler os números. Agora é uma cor sobre
+  trilho neutro.
+
+⚠️ **`useLargura` (ResizeObserver) não é preciosismo.** O SVG antigo usava
+`preserveAspectRatio="none"`, que dá escalas diferentes a X e Y e **transforma todo círculo em
+elipse** — era o que deformava os pontos. Não há correção por CSS depois; o jeito é o `viewBox`
+ter a largura real do elemento.
+
+**As cores das séries** (`COR_SERIE`) são `#149911` (verde da marca) e `#0B7FBF`. Passam nos seis
+testes de paleta categórica nos **dois** temas — banda de luminosidade, piso de croma, separação
+para daltonismo (ΔE 23,6, contra o mínimo de 8) e contraste ≥ 3:1 contra as duas superfícies.
+Mesmos valores nos dois temas de propósito: o que muda é o fundo, não a identidade da série.
+
 ## Ordenação das listagens
 
 `src/hooks/useOrdenacao.ts` + o `Ordenavel` de `ui/Tabela` dão ordenação crescente/decrescente
@@ -331,6 +448,15 @@ antiga por resolver, Clientes por "falta checar".
 
 Três decisões que a implementação carrega:
 
+- **O cliente prioritário vem antes de tudo.** O `useOrdenacao` aceita uma âncora
+  (`prioritario`) que ordena antes da coluna escolhida e **não** é multiplicada pelo sinal da
+  direção — inverter a coluna não pode mandar o prioritário para o fim da lista, que é justamente
+  onde ele não pode estar. É prefixo, não substituição: dentro de cada grupo a ordenação pedida
+  continua valendo.
+  <p>
+  ⚠️ O backend faz o mesmo na consulta (`common/web/PrioridadePrimeiro`), e as duas pontas
+  precisam concordar: se divergissem, paginar no servidor embaralharia a ordem entre uma página e
+  outra. Toda listagem que mostra cliente passa a âncora.
 - **É no cliente.** O `AppContext` já traz as listas inteiras (dezenas a centenas de linhas), e
   ordenar aqui é instantâneo em vez de uma ida ao servidor por clique. Se o volume crescer a
   ponto de paginar no servidor, é este hook que passa a mandar `sort` na requisição.
@@ -346,6 +472,33 @@ descrita abaixo.
 O rótulo clicável é `whitespace-nowrap`: com o texto quebrando em duas linhas, a seta ia parar
 ao lado do bloco inteiro e parecia solta no meio do cabeçalho. Rótulo de coluna é curto, e a
 tabela tem largura — se algum precisar de duas linhas, encurte o rótulo em vez de deixar quebrar.
+
+## A regra do débito futuro mora em `utils/debito.ts`
+
+O backend é quem decide se o projeto pode ir à Coelba (`ProjetoService`), e é lá que a regra tem
+de ficar: ela precisa valer também quando a origem não é a tela — a importação da planilha, a
+leitura do e-mail, uma integração futura. O que existe aqui é a mesma leitura feita **antes do
+clique**, para a analista não descobrir o motivo só depois de tentar enviar.
+
+`bloqueioDoEnvio(debitos)` devolve a função que responde por cliente, com os três motivos na mesma
+ordem do servidor: `SEM_CONSULTA` (ninguém olhou a agência virtual), `DEBITO_ATIVO` (o cliente
+deve) e `PROXIMO_DEBITO` (está quitado, mas a próxima conta vence em um dia ou menos — a Coelba
+analisaria o projeto já com débito em aberto).
+
+⚠️ Está num util, e não dentro do `ProjetosModule` como estava antes, porque o terceiro motivo
+nasceria copiado para a tela de Débitos e para a de Vistoria assim que alguém precisasse dele
+ali. Um lugar só.
+
+⚠️ **`diasAte` compara datas, não instantes**, e lê os números da string em vez de usar
+`new Date('2026-09-23')` — esse construtor lê a data pura como meia-noite **UTC**, que em
+`America/Sao_Paulo` é o dia anterior às 21h. Seria um erro de um dia exatamente na faixa em que a
+resposta muda de "pode enviar" para "não pode", e que só apareceria à noite. Mesma armadilha
+descrita abaixo.
+
+A coluna **"Próximo débito"** da tela de Projetos sai daí, e do débito de **homologação** — o de
+pendência pertence a outra etapa e mostrá-lo ali responderia a pergunta errada. Sem data, a
+coluna diz **"Não informado"** por extenso, e não um travessão: travessão se lê como "não tem", e
+aqui não se sabe.
 
 ## Datas
 
@@ -394,6 +547,35 @@ pessoa. Replicá-lo aqui significaria reimplementar no cliente a regra de que ca
 a sua data de referência — que é justamente o que o `DashboardRepository` faz. Leia-os como "a
 situação de agora, para esta pessoa". Se isso incomodar, a saída é mover os três blocos para a
 API, não copiar a lógica de datas para cá.
+
+## Deploy
+
+Escrito em 24/09/2026, junto com o do backend (seção 14 do CLAUDE.md de lá, e o runbook em
+`deploy/README.md` naquele repositório).
+
+O frontend vai para o **Cloudflare Pages**, não para o VPS onde a API roda. Ele é `vite build` —
+arquivos estáticos —, e o Pages os serve com TLS, CDN e build automático a cada push, de graça.
+Pôr um nginx no servidor para servir três arquivos seria mais coisa para manter, e ainda deixaria
+o frontend fora do ar toda vez que o VPS reiniciasse por causa da API.
+
+| Campo no painel do Pages | Valor |
+|---|---|
+| Build command | `npm run build` |
+| Output directory | `dist` |
+| `VITE_API_URL` | `https://api.solarsync.conectsol.com` |
+
+Dois pontos que custam tempo quando esquecidos:
+
+- ⚠️ **`VITE_API_URL` é lida no build, não em tempo de execução.** O Vite a substitui por
+  literal dentro do bundle (`src/api/client.ts`). Trocar a variável no painel não muda nada até
+  um "Retry deployment" — o sintoma é a tela nova continuar chamando o endereço antigo.
+- ⚠️ **A origem publicada precisa estar em `SOLARSYNC_CORS_ORIGENS` no servidor**, exatamente
+  como o navegador a vê: com `https://` e sem barra no fim. Errar isso é o motivo nº 1 de "a tela
+  carrega e nenhuma requisição funciona" — e o erro aparece só no console do navegador, porque
+  para a API a requisição nem chegou a ser processada.
+
+Não há rota no cliente (a navegação entre módulos é estado, não URL), então o Pages não precisa
+de regra de reescrita para SPA.
 
 ## Pendente
 
