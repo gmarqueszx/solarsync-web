@@ -1,0 +1,74 @@
+# Publica no VPS a cada push na main, depois de o build passar.
+#
+# O deploy é o deploy/deploy.sh do repositório do backend (gmarqueszx/solarsync), que atualiza os
+# DOIS repositórios e reconstrói a pilha. Sem este workflow, uma mudança só na tela ficaria
+# esperando o próximo push do backend para ir ao ar.
+#
+# Usa os mesmos secrets e a mesma chave restrita do workflow do backend — ver o deploy/README.md
+# de lá.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-producao
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22  # a mesma do Dockerfile
+          cache: npm
+
+      # O mesmo build que a imagem faz: se o tsc recusar aqui, recusaria no servidor.
+      - run: npm ci
+      - run: npm run build
+
+  publicar:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: prod
+    steps:
+      - name: Disparar deploy/deploy.sh no servidor
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USUARIO: ${{ secrets.DEPLOY_USUARIO }}
+          DEPLOY_CHAVE_SSH: ${{ secrets.DEPLOY_CHAVE_SSH }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          for v in DEPLOY_HOST DEPLOY_USUARIO DEPLOY_CHAVE_SSH DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Secret $v vazio. Ele precisa estar no environment 'prod' deste repositório."
+              exit 1
+            fi
+          done
+          install -m 700 -d ~/.ssh
+          # Mesma limpeza e diagnóstico do workflow do backend: a chave copiada do terminal web
+          # chega com espaço no fim das linhas e \r.
+          limpar() { tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d'; }
+          printf '%s\n' "$DEPLOY_CHAVE_SSH" | limpar > ~/.ssh/deploy
+          if ! grep -q -- '-----BEGIN ' ~/.ssh/deploy; then
+            { echo '-----BEGIN OPENSSH PRIVATE KEY-----'; cat ~/.ssh/deploy; echo '-----END OPENSSH PRIVATE KEY-----'; } > ~/.ssh/deploy.tmp
+            mv ~/.ssh/deploy.tmp ~/.ssh/deploy
+          fi
+          chmod 600 ~/.ssh/deploy
+          if ! ssh-keygen -y -f ~/.ssh/deploy > /dev/null 2>&1; then
+            echo "::error::DEPLOY_CHAVE_SSH não é uma chave privada válida."
+            echo "Linhas: $(wc -l < ~/.ssh/deploy); tamanho de cada: $(awk '{printf "%d ", length}' ~/.ssh/deploy)"
+            echo "Primeira: $(head -1 ~/.ssh/deploy)"
+            echo "Última:   $(tail -1 ~/.ssh/deploy)"
+            exit 1
+          fi
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" | limpar > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy -o BatchMode=yes "$DEPLOY_USUARIO@$DEPLOY_HOST"
