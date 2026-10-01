@@ -548,6 +548,46 @@ a sua data de referência — que é justamente o que o `DashboardRepository` fa
 situação de agora, para esta pessoa". Se isso incomodar, a saída é mover os três blocos para a
 API, não copiar a lógica de datas para cá.
 
+### "Situação por etapa" (30/09/2026)
+
+Quantos estão parados em cada etapa agora, vindo de `situacaoPorEtapa` da API — **não** é
+derivado das listas, justamente pela regra acima. ⚠️ É a exceção consciente ao recorte: a API
+ignora período **e** analista nessa seção (o porquê está no `CLAUDE.md` do backend, seção 5), e
+por isso ela também foge do `projetosNoRecorte`. O subtítulo do card diz "a equipe inteira, sem
+filtro de período"; a faixa de aprovados embaixo dele vem dos quantitativos e segue o período.
+O campo é opcional no mapeamento: com uma API anterior, a seção some em vez de quebrar o painel.
+
+## Diálogos: o `Modal` (30/09/2026)
+
+Dois bugs da primeira rodada de uso real, os dois do mesmo componente:
+
+- ⚠️ **O `onClose` não pode entrar em dependência de efeito.** Os módulos passam `onClose`
+  inline e guardam o estado do formulário neles mesmos, então cada tecla criava uma função nova;
+  com ela nas dependências do efeito de foco, o campo perdia o foco depois de **um** caractere
+  em todo diálogo do sistema. Fica numa ref.
+- **Portal para o `<body>`**: os módulos vivem dentro do `animate-entrar-tela` do `App`, e
+  ancestral com `transform` vira o bloco de contenção do `position: fixed`.
+
+E no `ClienteModal`: o `trim` dos campos é **no envio**, nunca no `onChange` — aparar a cada
+tecla comia o espaço digitado ("Vitória da Conquista" não saía). O formulário passou a `3xl` em
+duas colunas, e cabe sem rolagem numa tela de notebook de 768px.
+
+## Sessão: só a recusa do servidor desloga (30/09/2026)
+
+`renovarToken` distingue `RECUSADA` (400/401 do `/auth/refresh`) de `INDISPONIVEL` (5xx, 429,
+sem conexão). Só a primeira apaga os tokens; a segunda vira `SEM_CONEXAO` e a próxima
+requisição tenta de novo. Antes, qualquer falha da renovação deslogava — e com o deploy
+automático a API reinicia várias vezes por dia. Mesma regra na abertura (`AuthContext`): só
+401/403 do `/auth/eu` limpam a sessão.
+
+## Projetos: "feito, aguardando envio" (30/09/2026)
+
+`AGUARDANDO_ENVIO` aparece como **"Feito, aguardando envio"**, e a ação tem botão na linha da
+tabela (ícone `FileCheck2`) para todo projeto `RECEBIDO` — antes ficava só no rodapé do
+detalhe, e a equipe concluiu que o sistema não deixava registrar o projeto pronto sem enviá-lo.
+Não é oferecida a partir de `REPROVADO`: o envio a partir dali sairia como `ENCAMINHADO`, e o
+reenvio sumiria da contagem de reencaminhados.
+
 ## Deploy
 
 Escrito em 24/09/2026 e **refeito no mesmo dia** (ver abaixo). O runbook é o `deploy/README.md`

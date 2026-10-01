@@ -89,26 +89,41 @@ export function registrarPerdaDeSessao(callback: () => void) {
  * chama /auth/refresh e as outras esperam por ela. Sem isso, o refresh token seria rotacionado
  * várias vezes em paralelo e as chamadas concorrentes falhariam.
  */
-let renovacaoEmAndamento: Promise<boolean> | null = null;
+/**
+ * `RECUSADA` é o servidor dizendo que a sessão acabou (refresh vencido, usuário desativado): aí
+ * sim volta ao login. `INDISPONIVEL` é não ter conseguido perguntar — API reiniciando num deploy,
+ * proxy respondendo 502, rede caída.
+ *
+ * ⚠️ Antes as duas eram o mesmo `false`, e qualquer falha de transporte durante a renovação
+ * apagava os tokens: com o deploy automático a cada push na main, a API reinicia várias vezes
+ * por dia, e quem estivesse com o access token vencido naquele minuto era deslogado com um
+ * refresh token perfeitamente válido na mão. Foi a reclamação "o login não dura" da primeira
+ * rodada de uso real (30/09/2026).
+ */
+type ResultadoRenovacao = 'RENOVADA' | 'RECUSADA' | 'INDISPONIVEL';
 
-async function renovarToken(): Promise<boolean> {
+let renovacaoEmAndamento: Promise<ResultadoRenovacao> | null = null;
+
+async function renovarToken(): Promise<ResultadoRenovacao> {
   const refreshToken = armazenamentoDeToken.refresh();
-  if (!refreshToken) return false;
+  if (!refreshToken) return 'RECUSADA';
 
   if (!renovacaoEmAndamento) {
-    renovacaoEmAndamento = (async () => {
+    renovacaoEmAndamento = (async (): Promise<ResultadoRenovacao> => {
       try {
         const resposta = await fetch(`${BASE_URL}/api/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refreshToken }),
         });
-        if (!resposta.ok) return false;
+        // 400 e 401 são o servidor julgando o token; o resto (5xx, 429) não diz nada sobre ele.
+        if (resposta.status === 400 || resposta.status === 401) return 'RECUSADA';
+        if (!resposta.ok) return 'INDISPONIVEL';
         const dados = await resposta.json();
         armazenamentoDeToken.guardar(dados.accessToken, dados.refreshToken);
-        return true;
+        return 'RENOVADA';
       } catch {
-        return false;
+        return 'INDISPONIVEL';
       } finally {
         renovacaoEmAndamento = null;
       }
@@ -116,6 +131,8 @@ async function renovarToken(): Promise<boolean> {
   }
   return renovacaoEmAndamento;
 }
+
+const SEM_CONEXAO = 'Não foi possível falar com o servidor. Verifique se a API está no ar.';
 
 interface Opcoes {
   metodo?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -161,16 +178,17 @@ export async function requisitar<T>(caminho: string, opcoes: Opcoes = {}): Promi
       body: corpo === undefined ? undefined : JSON.stringify(corpo),
     });
   } catch {
-    throw new ApiError({
-      status: 0,
-      detail: 'Não foi possível falar com o servidor. Verifique se a API está no ar.',
-      codigo: 'SEM_CONEXAO',
-    });
+    throw new ApiError({ status: 0, detail: SEM_CONEXAO, codigo: 'SEM_CONEXAO' });
   }
 
   if (resposta.status === 401 && !publico && !jaRenovou) {
-    if (await renovarToken()) {
+    const renovacao = await renovarToken();
+    if (renovacao === 'RENOVADA') {
       return requisitar<T>(caminho, { ...opcoes, jaRenovou: true });
+    }
+    if (renovacao === 'INDISPONIVEL') {
+      // Os tokens ficam: a próxima requisição tenta renovar de novo, com o servidor de volta.
+      throw new ApiError({ status: 0, detail: SEM_CONEXAO, codigo: 'SEM_CONEXAO' });
     }
     armazenamentoDeToken.limpar();
     aoPerderSessao();

@@ -61,8 +61,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const eu = await authApi.eu();
         if (!cancelado) setUsuario(eu);
-      } catch {
-        armazenamentoDeToken.limpar();
+      } catch (erro) {
+        // Só a recusa do servidor encerra a sessão. Um F5 com a API reiniciando no deploy (502
+        // do proxy, ou sem conexão) caía aqui e apagava uma sessão válida; agora os tokens
+        // ficam, e o próximo carregamento entra direto.
+        if (erro instanceof ApiError && (erro.status === 401 || erro.status === 403)) {
+          armazenamentoDeToken.limpar();
+        }
       } finally {
         if (!cancelado) setCarregando(false);
       }

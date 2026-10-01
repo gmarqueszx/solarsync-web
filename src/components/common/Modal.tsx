@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
@@ -9,7 +10,7 @@ interface ModalProps {
   subtitle?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
+  maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
 }
 
 /** Tem de bater com a duração de `animate-sair-dialogo` no tailwind.config.js. */
@@ -40,8 +41,17 @@ export const Modal: React.FC<ModalProps> = ({
    * `fechar` só avisa o pai; quem decide desmontar é o efeito abaixo, olhando para `isOpen`.
    * Assim a animação de saída vale também quando o módulo fecha o diálogo por conta própria —
    * depois de salvar, por exemplo —, e não só quando se clica no X.
+   *
+   * ⚠️ `onClose` fica numa ref, e `fechar` tem identidade fixa. Os módulos passam
+   * `onClose={() => ...}` inline e guardam o estado do formulário neles mesmos, então cada tecla
+   * criava um `onClose` novo; com ele nas dependências do efeito de foco, o efeito rodava de
+   * novo a cada caractere, devolvia o foco ao botão que abriu o diálogo e o punha no próprio
+   * diálogo — o campo perdia o foco depois de uma letra. Bug apontado na primeira rodada de uso
+   * real (30/09/2026).
    */
-  const fechar = useCallback(() => onClose(), [onClose]);
+  const aoFechar = useRef(onClose);
+  aoFechar.current = onClose;
+  const fechar = useCallback(() => aoFechar.current(), []);
 
   useEffect(() => {
     if (isOpen) {
@@ -88,9 +98,16 @@ export const Modal: React.FC<ModalProps> = ({
     lg: 'max-w-lg',
     xl: 'max-w-xl',
     '2xl': 'max-w-2xl',
+    '3xl': 'max-w-3xl',
   }[maxWidth];
 
-  return (
+  /*
+   * Portal para o <body>: os módulos são renderizados dentro do invólucro `animate-entrar-tela`
+   * do App, que anima `transform`. Um ancestral com transform vira o bloco de contenção do
+   * `position: fixed`, e o diálogo deixava de se medir pela janela — durante a animação ele
+   * ficava preso ao tamanho do módulo, e `max-h-[90vh]` deixava de ser 90% da tela.
+   */
+  return createPortal(
     <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 sm:p-6">
       <div
         className={cn(
@@ -141,6 +158,7 @@ export const Modal: React.FC<ModalProps> = ({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
