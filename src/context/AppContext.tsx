@@ -423,7 +423,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     criarProjeto: (dados) => executar(() => projetosApi.criar(dados), 'Projeto criado'),
     aguardarEnvioProjeto: (id) =>
-      executar(() => projetosApi.aguardarEnvio(id), 'Projeto aguardando envio'),
+      executar(() => projetosApi.aguardarEnvio(id), 'Projeto marcado como feito, aguardando envio'),
     encaminharProjeto: (id, numeroSolicitacao, dataArt) =>
       executar(
         () => projetosApi.encaminhar(id, dataArt, undefined, numeroSolicitacao),

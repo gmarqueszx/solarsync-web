@@ -10,6 +10,7 @@ import {
   Debito,
   HistoricoStatus,
   KPIStats,
+  SituacaoPorEtapa,
   Pagina,
   Papel,
   Pendencia,
@@ -428,6 +429,8 @@ interface DashboardResposta {
     desligamentosComOsAberta: number;
     desligamentosConcluidos: number;
   };
+  /** Ausente numa API anterior a 30/09/2026 — a tela esconde a seção em vez de quebrar. */
+  situacaoPorEtapa?: SituacaoPorEtapa;
 }
 
 export const dashboardApi = {
@@ -474,6 +477,7 @@ export const dashboardApi = {
       desligamentosAguardando: r.quantitativos.desligamentosAguardando,
       desligamentosComOsAberta: r.quantitativos.desligamentosComOsAberta,
       desligamentosConcluidos: r.quantitativos.desligamentosConcluidos,
+      situacaoPorEtapa: r.situacaoPorEtapa ?? null,
     };
   },
 };

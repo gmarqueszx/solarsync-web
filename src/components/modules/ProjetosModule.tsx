@@ -31,6 +31,7 @@ import {
   ChevronRight,
   Pencil,
   CalendarClock,
+  FileCheck2,
 } from 'lucide-react';
 import { useOrdenacao } from '../../hooks/useOrdenacao';
 import { Ordenavel } from '../ui/Tabela';
@@ -592,6 +593,20 @@ export const ProjetosModule: React.FC = () => {
                     <td className="py-3.5 px-6 text-right">
                       {/* Só as transições que a máquina de estados do backend aceita. */}
                       <div className="flex items-center justify-end gap-1">
+                        {/*
+                          Feito hoje, enviado amanhã: sem este botão na linha, o único caminho a
+                          partir de RECEBIDO era encaminhar, e o projeto pronto ficava
+                          indistinguível do que ninguém começou (pedido da equipe, 30/09/2026).
+                        */}
+                        {proj.status === 'RECEBIDO' && (
+                          <button
+                            onClick={() => aguardarEnvioProjeto(proj.id).catch(() => {})}
+                            title="Projeto feito — aguardando envio à Coelba"
+                            className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                          >
+                            <FileCheck2 className="w-4 h-4" />
+                          </button>
+                        )}
                         {ANTES_DO_ENVIO.includes(proj.status) && (
                           <button
                             onClick={() => abrirModalEnvio(proj, 'ENCAMINHAR')}
@@ -707,9 +722,10 @@ export const ProjetosModule: React.FC = () => {
                       /* toast de erro já exibido pelo contexto */
                     }
                   }}
-                  className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+                  className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors flex items-center gap-1.5"
                 >
-                  Marcar como Aguardando Envio
+                  <FileCheck2 className="w-4 h-4" />
+                  Projeto feito, aguardando envio
                 </button>
               )}
               {ANTES_DO_ENVIO.includes(projetoSelecionado.status) && (

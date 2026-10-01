@@ -7,6 +7,7 @@ import { COR_SERIE, GraficoBarrasHorizontais, GraficoLinhas, Medidor } from '../
 import {
   ROTULO_STATUS_PROJETO,
   ROTULO_TIPO_PROJETO,
+  SituacaoPorEtapa,
   StatusProjeto,
   TipoProjeto,
 } from '../../types';
@@ -24,6 +25,7 @@ import {
   Calendar,
   Layers,
   UserRound,
+  Inbox,
 } from 'lucide-react';
 
 type PeriodoFiltro = 'HOJE' | '7D' | '30D' | '3M' | '12M' | 'TODOS' | 'PERSONALIZADO';
@@ -54,6 +56,127 @@ function intervaloDoAtalho(atalho: PeriodoFiltro): { de?: string; ate?: string }
   // O intervalo inclui hoje, então "7d" é hoje mais os seis anteriores.
   return { de: somarDiasISO(dias[atalho]), ate: hojeISO() };
 }
+
+/**
+ * Onde o fluxo está agora: quantos esperam em cada etapa, na ordem do trabalho. Pedido da equipe
+ * na primeira rodada de uso (30/09/2026) — os cards de cima respondem "como foi o período", e
+ * nenhum respondia "onde está parado".
+ *
+ * Os números da etapa **não** seguem o período nem o analista (a API os ignora, ver
+ * `SituacaoPorEtapa`); só a faixa de baixo, de aprovados, segue o período. Por isso cada metade
+ * diz a que recorte pertence.
+ */
+const plural = (n: number, um: string, varios: string) => `${n} ${n === 1 ? um : varios}`;
+
+const SituacaoPorEtapaCard: React.FC<{
+  etapas: SituacaoPorEtapa;
+  projetosAprovados: number;
+  vistoriasAprovadas: number;
+  rotuloPeriodo: string;
+}> = ({ etapas, projetosAprovados, vistoriasAprovadas, rotuloPeriodo }) => {
+  const colunas: Array<{
+    rotulo: string;
+    valor: number;
+    unidade: string;
+    detalhe?: string;
+    icone: React.ReactNode;
+  }> = [
+    {
+      rotulo: 'Triagem',
+      valor: etapas.triagem,
+      unidade: 'clientes',
+      detalhe: 'esperando checar pendência',
+      icone: <Inbox className="w-4 h-4 text-slate-500" />,
+    },
+    {
+      rotulo: 'Pendências',
+      valor: etapas.pendencias,
+      unidade: 'clientes',
+      detalhe: 'com pendência aberta na Coelba',
+      icone: <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />,
+    },
+    {
+      rotulo: 'Aguardando envio',
+      valor: etapas.projetosAFazer + etapas.projetosAguardandoEnvio,
+      unidade: 'projetos',
+      detalhe: `${etapas.projetosAFazer} a fazer · ${plural(etapas.projetosAguardandoEnvio, 'feito', 'feitos')}`,
+      icone: <FileCheck2 className="w-4 h-4 text-amber-600 dark:text-amber-400" />,
+    },
+    {
+      rotulo: 'Em análise Coelba',
+      valor: etapas.projetosEmAnalise,
+      unidade: 'projetos',
+      detalhe:
+        etapas.projetosEmCorrecao > 0
+          ? `+ ${plural(etapas.projetosEmCorrecao, 'reprovado', 'reprovados')} em correção`
+          : 'nenhum reprovado em correção',
+      icone: <Send className="w-4 h-4 text-sky-600 dark:text-sky-400" />,
+    },
+    {
+      rotulo: 'Aguardando vistoria',
+      valor: etapas.aguardandoVistoria,
+      unidade: 'projetos',
+      detalhe: 'aprovados, vistoria não pedida',
+      icone: <Wrench className="w-4 h-4 text-slate-500" />,
+    },
+    {
+      rotulo: 'Vistoria em análise',
+      valor: etapas.vistoriasEmAnalise,
+      unidade: 'projetos',
+      detalhe: 'esperando o resultado',
+      icone: <Clock className="w-4 h-4 text-sky-600 dark:text-sky-400" />,
+    },
+  ];
+
+  return (
+    <Card
+      title="Situação por etapa"
+      subtitle="Quantos estão parados em cada etapa agora — a equipe inteira, sem filtro de período"
+      headerBorder={true}
+    >
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        {colunas.map((c, i) => (
+          <div
+            key={c.rotulo}
+            className="relative rounded-xl bg-superficie-sutil dark:bg-white/[0.03] p-3.5"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-2xs font-medium text-texto-suave uppercase tracking-wider leading-tight">
+                <span className="text-texto-apagado tabular-nums mr-1">{i + 1}.</span>
+                {c.rotulo}
+              </span>
+              <span className="shrink-0">{c.icone}</span>
+            </div>
+            <div className="mt-2 flex items-baseline gap-1.5">
+              <span className="text-2xl font-semibold text-texto tabular-nums">{c.valor}</span>
+              <span className="text-2xs text-texto-suave">
+                {/* "clientes" e "projetos": tirar o "s" é o singular dos dois. */}
+                {c.valor === 1 ? c.unidade.slice(0, -1) : c.unidade}
+              </span>
+            </div>
+            {c.detalhe && <p className="mt-1 text-2xs text-texto-suave">{c.detalhe}</p>}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-borda dark:border-white/[0.04] flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-texto-suave">
+        <span className="text-2xs uppercase tracking-wider text-texto-apagado">
+          Concluídos em {rotuloPeriodo}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <strong className="text-texto font-semibold tabular-nums">{projetosAprovados}</strong>
+          projetos aprovados
+        </span>
+        <span className="flex items-center gap-1.5">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <strong className="text-texto font-semibold tabular-nums">{vistoriasAprovadas}</strong>
+          vistorias aprovadas
+        </span>
+      </div>
+    </Card>
+  );
+};
 
 export const DashboardModule: React.FC = () => {
   const { kpis, projetos, pendencias, usuarios, periodoDashboard, setPeriodoDashboard } =
@@ -440,6 +563,15 @@ export const DashboardModule: React.FC = () => {
           icone={<TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />}
         />
       </div>
+
+      {kpis.situacaoPorEtapa && (
+        <SituacaoPorEtapaCard
+          etapas={kpis.situacaoPorEtapa}
+          projetosAprovados={kpis.projetosAprovados}
+          vistoriasAprovadas={kpis.vistoriasAprovadas}
+          rotuloPeriodo={periodo === 'TODOS' ? 'todo o histórico' : 'o período escolhido'}
+        />
+      )}
 
       {/* Seção Gráfica: ritmo do trâmite e distribuição por tipo */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

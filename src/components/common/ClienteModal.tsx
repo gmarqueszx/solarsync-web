@@ -24,10 +24,26 @@ const FORMULARIO_VAZIO: DadosCliente = {
   banco: false,
 };
 
-const ouNulo = (v: string): string | null => {
-  const trim = v.trim();
-  return trim === '' ? null : trim;
+/**
+ * Durante a digitação guarda o texto como está; o `trim` fica para o envio (`aparar`). Aparar a
+ * cada tecla comia o espaço no instante em que era digitado — não dava para escrever "Vitória da
+ * Conquista" nem "(71) 9…", porque o espaço do fim sumia antes da letra seguinte.
+ */
+const ouNulo = (v: string): string | null => (v.trim() === '' ? null : v);
+
+const aparar = (v: string | null): string | null => {
+  const t = v?.trim() ?? '';
+  return t === '' ? null : t;
 };
+
+const paraEnvio = (f: DadosCliente): DadosCliente => ({
+  ...f,
+  nome: f.nome.trim(),
+  cidade: aparar(f.cidade),
+  vendedor: aparar(f.vendedor),
+  ucCoelba: aparar(f.ucCoelba),
+  telefone: aparar(f.telefone),
+});
 
 export const ClienteModal: React.FC<ClienteModalProps> = ({
   isOpen,
@@ -115,10 +131,11 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
 
     setSalvando(true);
     try {
+      const dados = paraEnvio(formulario);
       if (clienteEmEdicao) {
-        await atualizarCliente(clienteEmEdicao.id, formulario);
+        await atualizarCliente(clienteEmEdicao.id, dados);
       } else {
-        await criarCliente(formulario);
+        await criarCliente(dados);
       }
       onClose();
       if (onSucesso) onSucesso();
@@ -139,7 +156,7 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
           ? `Atualização cadastral do cliente #${clienteEmEdicao.id} (${clienteEmEdicao.nome})`
           : 'Ponto de partida do fluxo — os módulos de pendências, débitos, projetos e unificação dependem deste cadastro'
       }
-      maxWidth="lg"
+      maxWidth="3xl"
       footer={
         <>
           <button
@@ -166,21 +183,41 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
       }
     >
       <form id="form-cliente-modal" onSubmit={handleSalvar} className="space-y-4 text-xs">
-        {/* Nome */}
-        <div>
-          <label className="font-medium text-slate-700 dark:text-slate-200 block mb-1" htmlFor="cliente-nome">
-            Nome Completo do Cliente <span className="text-rose-600">*</span>
-          </label>
-          <input
-            id="cliente-nome"
-            type="text"
-            required
-            maxLength={150}
-            value={formulario.nome}
-            onChange={(e) => setFormulario((f) => ({ ...f, nome: e.target.value }))}
-            placeholder="Ex: Maria Souza dos Santos"
-            className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#149911]"
-          />
+        {/* Nome e data do pagamento: os dois campos que todo cadastro tem. */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="sm:col-span-2">
+            <label className="font-medium text-slate-700 dark:text-slate-200 block mb-1" htmlFor="cliente-nome">
+              Nome Completo do Cliente <span className="text-rose-600">*</span>
+            </label>
+            <input
+              id="cliente-nome"
+              type="text"
+              required
+              maxLength={150}
+              value={formulario.nome}
+              onChange={(e) => setFormulario((f) => ({ ...f, nome: e.target.value }))}
+              placeholder="Ex: Maria Souza dos Santos"
+              className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#149911]"
+            />
+          </div>
+
+          <div>
+            <label className="font-medium text-slate-700 dark:text-slate-200 block mb-1" htmlFor="cliente-pagamento">
+              Data do Pagamento
+            </label>
+            <input
+              id="cliente-pagamento"
+              type="date"
+              value={formulario.dataPagamento ?? ''}
+              onChange={(e) =>
+                setFormulario((f) => ({ ...f, dataPagamento: ouNulo(e.target.value) }))
+              }
+              className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#149911]"
+            />
+            <p className="text-[11px] text-[#424342] dark:text-slate-400 mt-1">
+              Marco zero do tempo de atendimento no dashboard.
+            </p>
+          </div>
         </div>
 
         {/* UC Coelba & Telefone */}
@@ -295,28 +332,12 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
           </div>
         </div>
 
-        {/* Data de Pagamento */}
-        <div>
-          <label className="font-medium text-slate-700 dark:text-slate-200 block mb-1" htmlFor="cliente-pagamento">
-            Data do Pagamento
-          </label>
-          <input
-            id="cliente-pagamento"
-            type="date"
-            value={formulario.dataPagamento ?? ''}
-            onChange={(e) =>
-              setFormulario((f) => ({ ...f, dataPagamento: ouNulo(e.target.value) }))
-            }
-            className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#149911]"
-          />
-        </div>
-
         {/*
           Os dois desenham o fluxo do cliente, e por isso ficam no cadastro e não numa ação: são
           decididos na entrada e valem do começo ao fim. Desmarcar "somente pendência" é o
           caminho para devolver ao fluxo completo o avulso que virou projeto de verdade.
         */}
-        <div className="space-y-2 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
           <label className="flex items-start gap-2 cursor-pointer" htmlFor="cliente-so-pendencia">
             <input
               id="cliente-so-pendencia"
@@ -357,13 +378,6 @@ export const ClienteModal: React.FC<ClienteModalProps> = ({
               </span>
             </span>
           </label>
-        </div>
-
-        <div className="text-[11px] text-[#424342] dark:text-slate-300 bg-emerald-50/80 dark:bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-100 dark:border-emerald-800/50 space-y-1">
-          <p>
-            💡 <strong>Marco zero de tempo:</strong> a data de pagamento é utilizada no
-            dashboard para calcular o tempo de atendimento do cliente até a primeira ação no fluxo.
-          </p>
         </div>
       </form>
     </Modal>

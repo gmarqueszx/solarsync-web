@@ -415,6 +415,24 @@ export interface KPIStats {
   desligamentosAguardando: number;
   desligamentosComOsAberta: number;
   desligamentosConcluidos: number;
+
+  /** Nulo só quando a API ainda não devolve a seção (backend anterior a 30/09/2026). */
+  situacaoPorEtapa: SituacaoPorEtapa | null;
+}
+
+/**
+ * Quantos estão parados em cada etapa **agora**, na ordem do fluxo. Ignora o período e o
+ * analista: é a fila de todos, e metade das etapas (a triagem, principalmente) não tem dono.
+ */
+export interface SituacaoPorEtapa {
+  triagem: number;
+  pendencias: number;
+  projetosAFazer: number;
+  projetosAguardandoEnvio: number;
+  projetosEmAnalise: number;
+  projetosEmCorrecao: number;
+  aguardandoVistoria: number;
+  vistoriasEmAnalise: number;
 }
 
 /**
@@ -478,7 +496,7 @@ export const ROTULO_TIPO_PROJETO: Record<TipoProjeto, string> = {
 
 export const ROTULO_STATUS_PROJETO: Record<StatusProjeto, string> = {
   RECEBIDO: 'Recebido',
-  AGUARDANDO_ENVIO: 'Aguardando envio',
+  AGUARDANDO_ENVIO: 'Feito, aguardando envio',
   ENCAMINHADO: 'Encaminhado',
   APROVADO: 'Aprovado',
   REPROVADO: 'Reprovado',
