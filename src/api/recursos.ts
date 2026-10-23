@@ -20,6 +20,7 @@ import {
   ProjetoResumo,
   StatusDebito,
   StatusDesligamento,
+  StatusAcompanhamento,
   StatusPendencia,
   StatusProjeto,
   StatusTriagem,
@@ -181,11 +182,24 @@ export const pendenciasApi = {
     solicitadoEm?: string;
     responsavelId?: number | null;
     observacao?: string | null;
+    numeroSolicitacao?: string | null;
   }) => api.post<Pendencia>('/api/pendencias', dados),
+  /**
+   * O PUT substitui: `numeroSolicitacao` omitido **apaga** o número. Quem chama manda o atual.
+   * O acompanhamento não vai aqui — tem endpoint próprio, abaixo.
+   */
   atualizar: (
     id: number,
-    dados: { tipo: TipoPendencia; responsavelId?: number | null; observacao?: string | null },
+    dados: {
+      tipo: TipoPendencia;
+      responsavelId?: number | null;
+      observacao?: string | null;
+      numeroSolicitacao: string | null;
+    },
   ) => api.put<Pendencia>(`/api/pendencias/${id}`, dados),
+  /** Anotação de trabalho: não muda o status nem entra no histórico. `null` limpa. */
+  definirAcompanhamento: (id: number, statusAcompanhamento: StatusAcompanhamento | null) =>
+    api.put<Pendencia>(`/api/pendencias/${id}/acompanhamento`, { statusAcompanhamento }),
 
   // Transições são endpoints de ação: o PUT não aceita status, de propósito.
   // Não há "iniciar": apontar a pendência na triagem já é iniciá-la.
