@@ -25,6 +25,7 @@ import {
   PeriodoDashboard,
   ProjetoLista,
   ProjetoResumo,
+  StatusAcompanhamento,
   StatusDebito,
   TipoDebito,
   TipoPendencia,
@@ -80,6 +81,7 @@ interface AppContextType {
     tipo: TipoPendencia;
     responsavelId?: number | null;
     observacao?: string | null;
+    numeroSolicitacao?: string | null;
   }) => Promise<void>;
   /**
    * Edita os dados da pendência — na prática, a observação. Vale em **qualquer** status: a
@@ -88,7 +90,16 @@ interface AppContextType {
    */
   atualizarPendencia: (
     id: number,
-    dados: { tipo: TipoPendencia; responsavelId?: number | null; observacao?: string | null },
+    dados: {
+      tipo: TipoPendencia;
+      responsavelId?: number | null;
+      observacao?: string | null;
+      numeroSolicitacao: string | null;
+    },
+  ) => Promise<void>;
+  definirAcompanhamentoPendencia: (
+    id: number,
+    statusAcompanhamento: StatusAcompanhamento | null,
   ) => Promise<void>;
   resolverPendencia: (id: number, observacao?: string) => Promise<void>;
   cancelarPendencia: (id: number, motivo: string) => Promise<void>;
@@ -284,6 +295,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           solicitadoEm: p.solicitadoEm,
           resolvidoEm: p.resolvidoEm,
           responsavel: p.responsavelId ? porUsuarioId.get(p.responsavelId) ?? null : null,
+          numeroSolicitacao: p.numeroSolicitacao,
+          statusAcompanhamento: p.statusAcompanhamento,
         })),
       );
       setDebitos(respostaDebitos.conteudo);
@@ -400,7 +413,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // "Aberta" já é "em andamento": apontar a pendência na triagem é iniciar a solicitação.
       executar(() => pendenciasApi.criar(dados), 'Pendência aberta — solicitação em andamento'),
     atualizarPendencia: (id, dados) =>
-      executar(() => pendenciasApi.atualizar(id, dados), 'Observações salvas'),
+      executar(() => pendenciasApi.atualizar(id, dados), 'Pendência atualizada'),
+    definirAcompanhamentoPendencia: (id, statusAcompanhamento) =>
+      executar(
+        () => pendenciasApi.definirAcompanhamento(id, statusAcompanhamento),
+        'Acompanhamento atualizado',
+      ),
     resolverPendencia: (id, observacao) =>
       executar(
         () => pendenciasApi.resolver(id, observacao),

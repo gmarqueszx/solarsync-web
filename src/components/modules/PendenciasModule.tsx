@@ -5,8 +5,10 @@ import {
   Cliente,
   Pendencia,
   PendenciaLista,
+  ROTULO_STATUS_ACOMPANHAMENTO,
   ROTULO_STATUS_PENDENCIA,
   ROTULO_TIPO_PENDENCIA,
+  StatusAcompanhamento,
   StatusPendencia,
   TipoPendencia,
 } from '../../types';
@@ -43,9 +45,16 @@ const VALORES_ORDENAVEIS = {
   cliente: (p: PendenciaLista) => p.cliente.nome,
   tipo: (p: PendenciaLista) => ROTULO_TIPO_PENDENCIA[p.tipo],
   responsavel: (p: PendenciaLista) => p.responsavel?.nome ?? null,
+  numeroSolicitacao: (p: PendenciaLista) => p.numeroSolicitacao,
   solicitadoEm: (p: PendenciaLista) => p.solicitadoEm,
   status: (p: PendenciaLista) => PESO_STATUS[p.status],
+  acompanhamento: (p: PendenciaLista) =>
+    p.statusAcompanhamento ? ROTULO_STATUS_ACOMPANHAMENTO[p.statusAcompanhamento] : null,
 };
+
+const OPCOES_ACOMPANHAMENTO = Object.keys(
+  ROTULO_STATUS_ACOMPANHAMENTO,
+) as StatusAcompanhamento[];
 
 type ColunaPendencia = keyof typeof VALORES_ORDENAVEIS;
 
@@ -57,6 +66,7 @@ export const PendenciasModule: React.FC = () => {
     usuarios,
     criarPendencia,
     atualizarPendencia,
+    definirAcompanhamentoPendencia,
     resolverPendencia,
     cancelarPendencia,
     reabrirPendencia,
@@ -88,6 +98,8 @@ export const PendenciasModule: React.FC = () => {
   const [busca, setBusca] = useState('');
   const [filtroStatus, setFiltroStatus] = useState<string>('TODOS');
   const [filtroResponsavel, setFiltroResponsavel] = useState<string>('TODOS');
+  // 'TODOS', 'SEM' (ninguém classificou) ou um StatusAcompanhamento.
+  const [filtroAcompanhamento, setFiltroAcompanhamento] = useState<string>('TODOS');
   const [pagina, setPagina] = useState(1);
   const itensPorPagina = 6;
 
@@ -125,12 +137,14 @@ export const PendenciasModule: React.FC = () => {
    */
   const [detalhe, setDetalhe] = useState<Pendencia | null>(null);
   const [observacaoEditada, setObservacaoEditada] = useState('');
+  const [numeroEditado, setNumeroEditado] = useState('');
   const [salvandoObservacao, setSalvandoObservacao] = useState(false);
 
   useEffect(() => {
     if (!pendenciaSelecionada) {
       setDetalhe(null);
       setObservacaoEditada('');
+      setNumeroEditado('');
       return;
     }
     let cancelado = false;
@@ -140,6 +154,7 @@ export const PendenciasModule: React.FC = () => {
         if (!cancelado) {
           setDetalhe(p);
           setObservacaoEditada(p.observacao ?? '');
+          setNumeroEditado(p.numeroSolicitacao ?? '');
         }
       })
       .catch(() => {
@@ -150,11 +165,15 @@ export const PendenciasModule: React.FC = () => {
     };
   }, [pendenciaSelecionada]);
 
-  const observacaoAlterada = !!detalhe && observacaoEditada !== (detalhe.observacao ?? '');
+  const observacaoAlterada =
+    !!detalhe
+    && (observacaoEditada !== (detalhe.observacao ?? '')
+      || numeroEditado.trim() !== (detalhe.numeroSolicitacao ?? ''));
 
   /**
    * O PUT substitui o registro inteiro, então tipo e responsável vão junto com os valores
-   * atuais — mandar só a observação apagaria os dois. (Status não está no PUT de propósito.)
+   * atuais — mandar só a observação apagaria os dois. (Status não está no PUT de propósito, e o
+   * acompanhamento tem endpoint próprio.)
    */
   const handleSalvarObservacao = async () => {
     if (!detalhe || !observacaoAlterada) return;
@@ -164,8 +183,13 @@ export const PendenciasModule: React.FC = () => {
         tipo: detalhe.tipo,
         responsavelId: detalhe.responsavel?.id ?? null,
         observacao: observacaoEditada.trim() || null,
+        numeroSolicitacao: numeroEditado.trim() || null,
       });
-      setDetalhe({ ...detalhe, observacao: observacaoEditada.trim() || null });
+      setDetalhe({
+        ...detalhe,
+        observacao: observacaoEditada.trim() || null,
+        numeroSolicitacao: numeroEditado.trim() || null,
+      });
     } catch {
       // O AppContext já mostrou o motivo; o texto digitado continua no campo.
     } finally {
@@ -178,6 +202,7 @@ export const PendenciasModule: React.FC = () => {
   const [novoTipo, setNovoTipo] = useState<TipoPendencia>('TROCA_TITULARIDADE');
   const [novoResponsavelId, setNovoResponsavelId] = useState<number | ''>('');
   const [novaObservacao, setNovaObservacao] = useState('');
+  const [novoNumero, setNovoNumero] = useState('');
 
   // A lista de clientes chega da API depois da primeira renderização: sincroniza o padrão.
   useEffect(() => {
@@ -193,7 +218,8 @@ export const PendenciasModule: React.FC = () => {
         (p.cliente.cidade ?? '').toLowerCase().includes(termo) ||
         ROTULO_TIPO_PENDENCIA[p.tipo].toLowerCase().includes(termo) ||
         (p.responsavel?.nome ?? '').toLowerCase().includes(termo) ||
-        (p.cliente.ucCoelba != null && p.cliente.ucCoelba.includes(busca));
+        (p.cliente.ucCoelba != null && p.cliente.ucCoelba.includes(busca)) ||
+        (p.numeroSolicitacao != null && p.numeroSolicitacao.toLowerCase().includes(termo));
 
       // As duas filas derivadas só fazem sentido para pendência ainda por resolver: uma
       // pendência resolvida ou cancelada não está travada por nada.
@@ -210,10 +236,24 @@ export const PendenciasModule: React.FC = () => {
       const matchResp =
         filtroResponsavel === 'TODOS' || String(p.responsavel?.id ?? '') === filtroResponsavel;
 
-      return matchTexto && matchStatus && matchResp;
+      const matchAcompanhamento =
+        filtroAcompanhamento === 'TODOS'
+        || (filtroAcompanhamento === 'SEM'
+          ? p.statusAcompanhamento == null
+          : p.statusAcompanhamento === filtroAcompanhamento);
+
+      return matchTexto && matchStatus && matchResp && matchAcompanhamento;
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendencias, busca, filtroStatus, filtroResponsavel, bloqueioDaResolucao, ordenacao]);
+  }, [
+    pendencias,
+    busca,
+    filtroStatus,
+    filtroResponsavel,
+    filtroAcompanhamento,
+    bloqueioDaResolucao,
+    ordenacao,
+  ]);
 
   // Pagination
   const totalPaginas = Math.ceil(pendenciasFiltradas.length / itensPorPagina) || 1;
@@ -245,9 +285,11 @@ export const PendenciasModule: React.FC = () => {
         tipo: novoTipo,
         responsavelId: novoResponsavelId === '' ? null : novoResponsavelId,
         observacao: novaObservacao || null,
+        numeroSolicitacao: novoNumero.trim() || null,
       });
       setIsModalNovoAberto(false);
       setNovaObservacao('');
+      setNovoNumero('');
     } catch {
       // O AppContext já mostrou o motivo da recusa; o modal fica aberto para correção.
     }
@@ -286,7 +328,7 @@ export const PendenciasModule: React.FC = () => {
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Buscar por cliente, cidade, UC Coelba ou tipo..."
+            placeholder="Buscar por cliente, cidade, UC, nº da solicitação ou tipo..."
             value={busca}
             onChange={(e) => {
               setBusca(e.target.value);
@@ -332,6 +374,24 @@ export const PendenciasModule: React.FC = () => {
             ))}
           </select>
 
+          {/* Acompanhamento Filter */}
+          <select
+            value={filtroAcompanhamento}
+            onChange={(e) => {
+              setFiltroAcompanhamento(e.target.value);
+              setPagina(1);
+            }}
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer shadow-sm"
+          >
+            <option value="TODOS">Todo Acompanhamento</option>
+            <option value="SEM">Sem acompanhamento</option>
+            {OPCOES_ACOMPANHAMENTO.map(a => (
+              <option key={a} value={a}>
+                {ROTULO_STATUS_ACOMPANHAMENTO[a]}
+              </option>
+            ))}
+          </select>
+
           {/* New Pendencia Button */}
           <button
             onClick={() => setIsModalNovoAberto(true)}
@@ -362,10 +422,18 @@ export const PendenciasModule: React.FC = () => {
                   <Ordenavel {...cabecalho('responsavel')}>Responsável</Ordenavel>
                 </th>
                 <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('numeroSolicitacao')}>Nº da Solicitação</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
                   <Ordenavel {...cabecalho('solicitadoEm')}>Solicitado Em</Ordenavel>
                 </th>
                 <th className="py-3 px-4">
                   <Ordenavel {...cabecalho('status')}>Status</Ordenavel>
+                </th>
+                <th className="py-3 px-4">
+                  <Ordenavel {...cabecalho('acompanhamento')}>
+                    Status de Acompanhamento
+                  </Ordenavel>
                 </th>
                 <th className="py-3 px-6 text-right">Ações</th>
               </tr>
@@ -373,7 +441,7 @@ export const PendenciasModule: React.FC = () => {
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {pendenciasPaginadas.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400">
+                  <td colSpan={8} className="py-8 text-center text-slate-400">
                     Nenhuma pendência encontrada com os filtros atuais.
                   </td>
                 </tr>
@@ -416,6 +484,9 @@ export const PendenciasModule: React.FC = () => {
                         <span>{p.responsavel?.nome ?? '—'}</span>
                       </div>
                     </td>
+                    <td className="py-3.5 px-4 font-mono text-[11px] text-slate-700">
+                      {p.numeroSolicitacao ?? <span className="text-slate-300">—</span>}
+                    </td>
                     <td className="py-3.5 px-4 text-slate-500">
                       <div className="flex items-center gap-1">
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
@@ -447,6 +518,36 @@ export const PendenciasModule: React.FC = () => {
                             falta consultar o débito
                           </div>
                         )}
+                    </td>
+                    <td className="py-3.5 px-4">
+                      {/*
+                        Anotação de trabalho, fora do ciclo de vida: trocar aqui não mexe no
+                        status nem entra no histórico, por isso vale em qualquer status.
+                      */}
+                      <select
+                        aria-label={`Status de acompanhamento de ${p.cliente.nome}`}
+                        value={p.statusAcompanhamento ?? ''}
+                        onChange={(e) =>
+                          definirAcompanhamentoPendencia(
+                            p.id,
+                            e.target.value === ''
+                              ? null
+                              : (e.target.value as StatusAcompanhamento),
+                          ).catch(() => {})
+                        }
+                        className={`max-w-[11rem] bg-white border rounded-lg px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-[#149911] cursor-pointer ${
+                          p.statusAcompanhamento
+                            ? 'border-slate-300 text-slate-800 font-medium'
+                            : 'border-slate-200 text-slate-400'
+                        }`}
+                      >
+                        <option value="">—</option>
+                        {OPCOES_ACOMPANHAMENTO.map(a => (
+                          <option key={a} value={a}>
+                            {ROTULO_STATUS_ACOMPANHAMENTO[a]}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td className="py-3.5 px-6 text-right">
                       {/* Só as transições que a API aceita para o status atual da linha. */}
@@ -645,6 +746,25 @@ export const PendenciasModule: React.FC = () => {
               </div>
             </div>
 
+            <div className="space-y-1">
+              <label
+                htmlFor="numero-solicitacao-pendencia"
+                className="text-xs font-medium text-slate-700 block"
+              >
+                Nº da Solicitação <span className="font-normal text-slate-400">(opcional)</span>
+              </label>
+              <input
+                id="numero-solicitacao-pendencia"
+                type="text"
+                maxLength={50}
+                value={numeroEditado}
+                disabled={!detalhe}
+                onChange={(e) => setNumeroEditado(e.target.value)}
+                placeholder="Só para os tipos de pendência que geram número na Coelba"
+                className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-700 font-mono focus:outline-none focus:ring-1 focus:ring-[#149911] focus:border-[#149911] disabled:bg-slate-50 disabled:text-slate-400"
+              />
+            </div>
+
             {/*
               Editável sempre, inclusive em pendência resolvida ou cancelada (pedido do usuário
               em 16/09/2026): a observação é o parecer do que aconteceu na Coelba, e é depois de
@@ -683,7 +803,7 @@ export const PendenciasModule: React.FC = () => {
                   onClick={handleSalvarObservacao}
                   className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#149911] hover:bg-[#256D1B] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm shrink-0"
                 >
-                  {salvandoObservacao ? 'Salvando…' : 'Salvar observações'}
+                  {salvandoObservacao ? 'Salvando…' : 'Salvar alterações'}
                 </button>
               </div>
             </div>
@@ -815,6 +935,20 @@ export const PendenciasModule: React.FC = () => {
                 ))}
               </select>
             </div>
+          </div>
+
+          <div>
+            <label className="font-medium text-slate-700 block mb-1">
+              Nº da Solicitação <span className="font-normal text-slate-400">(opcional)</span>
+            </label>
+            <input
+              type="text"
+              maxLength={50}
+              value={novoNumero}
+              onChange={(e) => setNovoNumero(e.target.value)}
+              placeholder="Se o tipo de pendência gerar número na Coelba"
+              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-800 font-mono focus:ring-1 focus:ring-[#149911]"
+            />
           </div>
 
           <div>

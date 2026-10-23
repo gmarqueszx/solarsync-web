@@ -166,6 +166,27 @@ export type TipoPendencia =
  */
 export type StatusPendencia = 'ABERTA' | 'RESOLVIDA' | 'CANCELADA';
 
+/**
+ * Anotação de acompanhamento de quem trabalha a pendência. **Não é** o ciclo de vida (isso é o
+ * `StatusPendencia`): muda por endpoint próprio, em qualquer status, sem evento nem histórico.
+ * `null` é "ninguém classificou ainda".
+ */
+export type StatusAcompanhamento =
+  | 'PENDENTE'
+  | 'DEBITO'
+  | 'ACOMPANHAR'
+  | 'PERIODO_DE_LEITURA'
+  | 'AGUARDO_ACOMPANHAMENTO'
+  | 'STAND_BY'
+  | 'PROJETO_CANCELADO'
+  | 'B_OPTANTE'
+  | 'SOLICITACAO_CANCELAMENTO'
+  | 'RESOLVER_NA_COELBA'
+  | 'FOI_SEM_BENEFICIARIO'
+  | 'NOTA_RETIDA'
+  | 'OBRA'
+  | 'PAGO_AG_DEBITAR';
+
 export interface Pendencia {
   id: number;
   cliente: ClienteResumo;
@@ -175,6 +196,9 @@ export interface Pendencia {
   resolvidoEm: string | null;
   responsavel: UsuarioResumo | null;
   observacao: string | null;
+  /** Gerado pela Coelba em alguns tipos de pendência; opcional. */
+  numeroSolicitacao: string | null;
+  statusAcompanhamento: StatusAcompanhamento | null;
   criadoEm: string;
   atualizadoEm: string;
 }
@@ -191,6 +215,8 @@ export interface PendenciaResumo {
   resolvidoEm: string | null;
   responsavelId: number | null;
   responsavelNome: string | null;
+  numeroSolicitacao: string | null;
+  statusAcompanhamento: StatusAcompanhamento | null;
 }
 
 // ---------- Débito ----------
@@ -292,6 +318,8 @@ export interface PendenciaLista {
   solicitadoEm: string;
   resolvidoEm: string | null;
   responsavel: UsuarioResumo | null;
+  numeroSolicitacao: string | null;
+  statusAcompanhamento: StatusAcompanhamento | null;
 }
 
 export interface ProjetoLista {
@@ -484,6 +512,24 @@ export const ROTULO_STATUS_PENDENCIA: Record<StatusPendencia, string> = {
   ABERTA: 'Aberta',
   RESOLVIDA: 'Resolvida',
   CANCELADA: 'Cancelada',
+};
+
+/** Na ordem em que a equipe usava na planilha, que é a ordem do seletor. */
+export const ROTULO_STATUS_ACOMPANHAMENTO: Record<StatusAcompanhamento, string> = {
+  PENDENTE: 'Pendente',
+  DEBITO: 'Débito',
+  ACOMPANHAR: 'Acompanhar',
+  PERIODO_DE_LEITURA: 'Período de leitura',
+  AGUARDO_ACOMPANHAMENTO: 'Aguardo acompanhamento',
+  STAND_BY: 'Stand by',
+  PROJETO_CANCELADO: 'Projeto cancelado',
+  B_OPTANTE: 'B-optante',
+  SOLICITACAO_CANCELAMENTO: 'Solicitação cancelamento',
+  RESOLVER_NA_COELBA: 'Resolver na Coelba',
+  FOI_SEM_BENEFICIARIO: 'Foi sem beneficiário',
+  NOTA_RETIDA: 'Nota retida',
+  OBRA: 'Obra',
+  PAGO_AG_DEBITAR: 'Pago, ag. debitar',
 };
 
 export const TIPOS_PROJETO: TipoProjeto[] = ['PROJETO_INICIAL', 'AMPLIACAO', 'CORRECAO'];
