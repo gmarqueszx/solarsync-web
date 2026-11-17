@@ -13,6 +13,7 @@ import {
   Building2,
   Users,
   UserCog,
+  History,
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -122,6 +123,13 @@ export const Sidebar: React.FC = () => {
       id: 'usuarios',
       label: 'Usuários & Acesso',
       icon: UserCog,
+      administracao: true,
+    },
+    {
+      // Mesmo recorte de Usuários: o log mostra o que cada pessoa da equipe fez.
+      id: 'logs',
+      label: 'Log de Atividades',
+      icon: History,
       administracao: true,
     },
   ];

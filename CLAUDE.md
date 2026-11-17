@@ -301,6 +301,24 @@ Google). Contas antigas sem senha aparecem na tela com o aviso de que não conse
 - Depois de cada mutação, o módulo chama `recarregar()` do contexto: os seletores de responsável
   das outras telas saem deste mesmo cadastro e ficariam desatualizados até o próximo F5.
 
+### Log de Atividades (`LogsModule`, 16/11/2026)
+
+Segundo item da seção "Administração", com o mesmo recorte de Usuários (ADMINISTRADOR e
+GESTOR; a API responde 403 ao ANALISTA). Mostra quem criou, editou ou excluiu cada registro,
+quando, e o antes/depois de cada campo — `GET /api/logs`. O backend grava sozinho, a partir dos
+eventos do Hibernate; a tela não registra nada.
+
+- **Paginado no servidor** (50 por página), ao contrário das outras listagens, que trazem 200 e
+  filtram no navegador: o log só cresce. Por isso também não há ordenação por coluna — é sempre
+  do mais recente para o mais antigo.
+- A busca por nome espera 350 ms sem digitação antes de consultar.
+- Os nomes de campo e os valores de enum chegam crus (`statusTriagem`, `SEM_PENDENCIA`) e são
+  traduzidos no módulo (`ROTULO_CAMPO`, `rotuloValor`), reaproveitando os `ROTULO_*` de
+  `types`. `status` e `tipo` dependem do tipo do registro — status de pendência e de projeto
+  são listas diferentes. Campo novo no backend sem rótulo aqui aparece com o nome cru, não some.
+- Linha sem `usuarioId` é **"Sistema"**: as integrações (Nectar, Gmail) rodam sem usuário.
+- Criação e exclusão trazem todos os campos; a tela mostra 3 e recolhe o resto.
+
 ## Pendências: não há botão de "iniciar"
 
 ⚠️ O botão de **play** ("Iniciar Atendimento", `ABERTA → EM_ANDAMENTO`) saiu em 19/09/2026,

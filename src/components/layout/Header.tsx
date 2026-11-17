@@ -44,6 +44,10 @@ export const Header: React.FC = () => {
       titulo: 'Usuários & Acesso',
       descricao: 'Quem entra no sistema, com que papel e com o acesso ativo ou cortado',
     },
+    logs: {
+      titulo: 'Log de Atividades',
+      descricao: 'Quem criou, editou ou excluiu cada registro, quando, e o que mudou',
+    },
   };
 
   const infoAtual = titulosModulo[moduloAtivo] || {

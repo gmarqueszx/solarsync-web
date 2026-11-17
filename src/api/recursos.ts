@@ -9,7 +9,9 @@ import {
   DadosPrioridade,
   Debito,
   HistoricoStatus,
+  FiltroLog,
   KPIStats,
+  LogAtividade,
   SituacaoPorEtapa,
   Pagina,
   Papel,
@@ -148,6 +150,14 @@ export const usuariosApi = {
    * histórico — por isso não há botão de excluir na tela.
    */
   desativar: (id: number) => api.post<Usuario>(`/api/usuarios/${id}/desativar`),
+};
+
+// ---------- Log de atividades ----------
+
+/** Só ADMINISTRADOR e GESTOR — a API responde 403 para ANALISTA. Paginado no servidor. */
+export const logsApi = {
+  listar: (filtro: FiltroLog, pagina: number, tamanho = 50) =>
+    api.get<Pagina<LogAtividade>>('/api/logs', { ...filtro, page: pagina, size: tamanho }),
 };
 
 // ---------- Pendências ----------
