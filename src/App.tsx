@@ -13,6 +13,7 @@ import { ProjetosModule } from './components/modules/ProjetosModule';
 import { VistoriaModule } from './components/modules/VistoriaModule';
 import { UnificacaoModule } from './components/modules/UnificacaoModule';
 import { UsuariosModule } from './components/modules/UsuariosModule';
+import { LogsModule } from './components/modules/LogsModule';
 import { ToastContainer } from './components/common/Toast';
 
 const MainContent: React.FC = () => {
@@ -36,6 +37,8 @@ const MainContent: React.FC = () => {
         return <UnificacaoModule />;
       case 'usuarios':
         return <UsuariosModule />;
+      case 'logs':
+        return <LogsModule />;
       default:
         return <PendenciasModule />;
     }

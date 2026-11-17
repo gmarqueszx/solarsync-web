@@ -473,6 +473,59 @@ export interface PeriodoDashboard {
   analistaId?: number;
 }
 
+// ---------- Log de atividades ----------
+
+export type AcaoLog = 'CRIACAO' | 'EDICAO' | 'EXCLUSAO';
+
+export type EntidadeLog =
+  | 'CLIENTE'
+  | 'PENDENCIA'
+  | 'DEBITO'
+  | 'PROJETO'
+  | 'VISTORIA'
+  | 'UNIFICACAO'
+  | 'USUARIO';
+
+/**
+ * Um campo que mudou. `campo` é o nome da propriedade no backend (camelCase); o rótulo em
+ * português sai de `ROTULO_CAMPO_LOG`. Os valores vêm como texto: enum pelo nome, data em ISO,
+ * cliente ou usuário referenciado pelo nome.
+ */
+export interface AlteracaoLog {
+  campo: string;
+  anterior: string | null;
+  novo: string | null;
+}
+
+/**
+ * Uma linha do log. `usuarioId` nulo é ação do sistema (integrações com Nectar e Gmail). O
+ * `usuarioNome` é o de quando a ação aconteceu — continua legível se a pessoa for renomeada.
+ */
+export interface LogAtividade {
+  id: number;
+  ocorridoEm: string;
+  usuarioId: number | null;
+  usuarioNome: string | null;
+  acao: AcaoLog;
+  entidadeTipo: EntidadeLog;
+  entidadeId: number;
+  /** Nome do cliente (ou do usuário, nas linhas de USUARIO). */
+  descricao: string | null;
+  alteracoes: AlteracaoLog[];
+}
+
+export interface FiltroLog {
+  usuarioId?: number;
+  entidadeTipo?: EntidadeLog;
+  entidadeId?: number;
+  acao?: AcaoLog;
+  /** `YYYY-MM-DD`, inclusivos. */
+  de?: string;
+  ate?: string;
+  /** Busca no nome do cliente/usuário afetado. */
+  q?: string;
+}
+
 // ---------- Navegação ----------
 
 export type ModuloNavegacao =
@@ -484,7 +537,9 @@ export type ModuloNavegacao =
   | 'vistoria'
   | 'unificacao'
   /** Só ADMINISTRADOR e GESTOR: é o único caminho de entrada de gente no sistema. */
-  | 'usuarios';
+  | 'usuarios'
+  /** Só ADMINISTRADOR e GESTOR: quem fez cada alteração, e quando. */
+  | 'logs';
 
 // ---------- Rótulos ----------
 
